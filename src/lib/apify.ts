@@ -27,7 +27,7 @@ async function apifyFetchWithRetry(url: string, options: RequestInit = {}, retri
     try {
       console.log(`🔍 Apify API call attempt ${i + 1}/${retries}:`, url);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      const timeoutId = setTimeout(() => controller.abort(), 120000); // Increased to 2 minutes
       
       const startTime = Date.now();
       const response = await fetch(url, {
@@ -114,28 +114,71 @@ export const createApifyService = (apiKey: string) => ({
     }
   },
 
-  async scrapeProfiles(profileUrls: string[]): Promise<string> {
+  async scrapeProfiles(profileUrls: string[], onProgress?: (current: number, total: number) => void): Promise<string> {
     try {
       console.log('🔍 Starting profile scraping for', profileUrls.length, 'profiles');
       
-      const response = await apifyFetchWithRetry(`https://api.apify.com/v2/acts/2SyF0bVxmgGr8IVCZ/runs`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          profileUrls: profileUrls
-        }),
-      });
+      // For large batches, process in smaller chunks to avoid timeouts
+      const BATCH_SIZE = 50; // Reduced batch size
+      const batches = [];
+      
+      for (let i = 0; i < profileUrls.length; i += BATCH_SIZE) {
+        batches.push(profileUrls.slice(i, i + BATCH_SIZE));
+      }
+      
+      console.log(`📦 Processing ${profileUrls.length} profiles in ${batches.length} batches of ${BATCH_SIZE}`);
+      
+      const allResults: any[] = [];
+      
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        console.log(`🔄 Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} profiles)`);
+        
+        if (onProgress) {
+          onProgress(batchIndex * BATCH_SIZE, profileUrls.length);
+        }
+        
+        const response = await apifyFetchWithRetry(`https://api.apify.com/v2/acts/2SyF0bVxmgGr8IVCZ/runs`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            profileUrls: batch
+          }),
+        });
 
-      const result: ApifyRunResponse = await response.json();
-      console.log('✅ Profile scraping started, run ID:', result.data.id);
+        const result: ApifyRunResponse = await response.json();
+        console.log(`✅ Batch ${batchIndex + 1} scraping started, run ID:`, result.data.id);
+        
+        await this.waitForRunCompletion(result.data.id);
+        
+        const batchData = await this.getDatasetItems(result.data.defaultDatasetId);
+        allResults.push(...batchData);
+        
+        console.log(`✅ Batch ${batchIndex + 1} completed with ${batchData.length} profiles`);
+        
+        // Small delay between batches to avoid overwhelming the API
+        if (batchIndex < batches.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
       
-      await this.waitForRunCompletion(result.data.id);
+      if (onProgress) {
+        onProgress(profileUrls.length, profileUrls.length);
+      }
       
-      console.log('✅ Profile scraping completed, dataset ID:', result.data.defaultDatasetId);
-      return result.data.defaultDatasetId;
+      // Create a combined dataset (this is a simplified approach)
+      // In a real implementation, you might want to create a new dataset and upload the combined results
+      console.log(`✅ All batches completed. Total profiles scraped: ${allResults.length}`);
+      
+      // For now, we'll return a mock dataset ID and store results in memory
+      // In production, you'd want to properly handle this
+      const mockDatasetId = `combined-${Date.now()}`;
+      (this as any)._combinedResults = allResults;
+      
+      return mockDatasetId;
     } catch (error) {
       console.error('❌ Error scraping profiles:', error);
       if (error instanceof Error) {
@@ -146,8 +189,8 @@ export const createApifyService = (apiKey: string) => ({
   },
 
   async waitForRunCompletion(runId: string): Promise<void> {
-    const maxWaitTime = 10 * 60 * 1000;
-    const pollInterval = 5000;
+    const maxWaitTime = 20 * 60 * 1000; // Increased to 20 minutes
+    const pollInterval = 10000; // Increased to 10 seconds
     const startTime = Date.now();
 
     console.log('⏳ Waiting for Apify run completion:', runId);
@@ -174,12 +217,19 @@ export const createApifyService = (apiKey: string) => ({
       }
     }
     
-    throw new Error('Apify run timed out after 10 minutes');
+    throw new Error('Apify run timed out after 20 minutes');
   },
 
   async getDatasetItems(datasetId: string): Promise<any[]> {
     try {
       console.log('🔍 Fetching dataset items for:', datasetId);
+      
+      // Handle combined results from batch processing
+      if (datasetId.startsWith('combined-') && (this as any)._combinedResults) {
+        const results = (this as any)._combinedResults;
+        console.log('✅ Retrieved', results.length, 'combined dataset items');
+        return results;
+      }
       
       const response = await apifyFetchWithRetry(`https://api.apify.com/v2/datasets/${datasetId}/items`, {
         headers: {

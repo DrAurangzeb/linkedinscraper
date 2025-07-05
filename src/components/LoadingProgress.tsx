@@ -1,5 +1,5 @@
 import React from 'react';
-import { Loader2, CheckCircle, AlertCircle, MessageSquare, User, Users } from 'lucide-react';
+import { Loader2, CheckCircle, AlertCircle, MessageSquare, User, Users, X, StopCircle } from 'lucide-react';
 
 interface LoadingProgressProps {
   type: 'post_comments' | 'profile_details' | 'mixed';
@@ -7,6 +7,10 @@ interface LoadingProgressProps {
   progress?: number;
   message?: string;
   error?: string;
+  currentCount?: number;
+  totalCount?: number;
+  onCancel?: () => void;
+  canCancel?: boolean;
 }
 
 export const LoadingProgress: React.FC<LoadingProgressProps> = ({
@@ -14,7 +18,11 @@ export const LoadingProgress: React.FC<LoadingProgressProps> = ({
   stage,
   progress = 0,
   message,
-  error
+  error,
+  currentCount,
+  totalCount,
+  onCancel,
+  canCancel = false
 }) => {
   const getIcon = () => {
     switch (type) {
@@ -50,6 +58,9 @@ export const LoadingProgress: React.FC<LoadingProgressProps> = ({
       case 'extracting_profiles':
         return 'Extracting profile URLs from comments...';
       case 'scraping_profiles':
+        if (currentCount !== undefined && totalCount !== undefined) {
+          return `Scraping profiles: ${currentCount}/${totalCount} completed`;
+        }
         return 'Gathering detailed profile information...';
       case 'saving_data':
         return 'Saving data to database...';
@@ -103,12 +114,37 @@ export const LoadingProgress: React.FC<LoadingProgressProps> = ({
         </div>
         
         <div className="flex-1">
-          <h3 className="text-xl font-bold text-gray-900 mb-1">
-            {getTypeTitle()}
-          </h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-gray-900 mb-1">
+              {getTypeTitle()}
+            </h3>
+            
+            {canCancel && onCancel && stage !== 'completed' && stage !== 'error' && (
+              <button
+                onClick={onCancel}
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+              >
+                <StopCircle className="w-4 h-4" />
+                Cancel
+              </button>
+            )}
+          </div>
+          
           <p className="text-gray-600">
             {getStageMessage()}
           </p>
+          
+          {/* Progress Counter */}
+          {currentCount !== undefined && totalCount !== undefined && stage === 'scraping_profiles' && (
+            <div className="mt-2 flex items-center gap-4">
+              <div className="text-sm font-medium text-blue-600">
+                Progress: {currentCount}/{totalCount} profiles
+              </div>
+              <div className="text-xs text-gray-500">
+                {totalCount > 0 ? Math.round((currentCount / totalCount) * 100) : 0}% complete
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

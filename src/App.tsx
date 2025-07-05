@@ -8,14 +8,14 @@ import { ProfileResultsTable } from './components/ProfileResultsTable';
 import { LocalApifyKeyManager } from './components/LocalApifyKeyManager';
 import { LocalJobsTable } from './components/LocalJobsTable';
 import { DataTable } from './components/DataTable';
-import { StorageManager } from './components/StorageManager';
+import { FeedbackPage } from './components/FeedbackPage';
 import { createApifyService } from './lib/apify';
 import { SupabaseProfilesService } from './lib/supabaseProfiles';
 import { LocalStorageService, type LocalUser, type LocalApifyKey, type LocalJob } from './lib/localStorage';
 import { exportData } from './utils/export';
 import { 
   Linkedin, Database, Activity, Clock, Loader2, AlertCircle, 
-  User, LogOut, ChevronDown, HardDrive
+  User, LogOut, ChevronDown, MessageCircle
 } from 'lucide-react';
 
 interface CommentData {
@@ -46,8 +46,8 @@ function App() {
   const [scrapingJobs, setScrapingJobs] = useState<LocalJob[]>([]);
   
   // UI state
-  const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs' | 'storage'>('scraper');
-  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details' | 'storage'>('form');
+  const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs' | 'feedback'>('scraper');
+  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details' | 'feedback'>('form');
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
   
   // Scraping state
@@ -59,6 +59,12 @@ function App() {
   const [loadingError, setLoadingError] = useState('');
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
   const [showUserMenu, setShowUserMenu] = useState(false);
+  
+  // Progress tracking
+  const [currentProfileCount, setCurrentProfileCount] = useState(0);
+  const [totalProfileCount, setTotalProfileCount] = useState(0);
+  const [canCancelScraping, setCanCancelScraping] = useState(false);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
 
   // Initialize app
   useEffect(() => {
@@ -152,6 +158,30 @@ function App() {
     setShowUserMenu(false);
   };
 
+  const handleCancelScraping = () => {
+    if (currentJobId) {
+      // Update job status to cancelled
+      const job = scrapingJobs.find(j => j.id === currentJobId);
+      if (job) {
+        const cancelledJob: LocalJob = {
+          ...job,
+          status: 'failed',
+          errorMessage: 'Cancelled by user',
+          completedAt: new Date().toISOString()
+        };
+        LocalStorageService.saveJob(cancelledJob);
+        setScrapingJobs(prev => prev.map(j => j.id === currentJobId ? cancelledJob : j));
+      }
+    }
+    
+    setIsScraping(false);
+    setCanCancelScraping(false);
+    setCurrentJobId(null);
+    setCurrentProfileCount(0);
+    setTotalProfileCount(0);
+    updateLoadingProgress('error', 0, 'Scraping cancelled by user');
+  };
+
   const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', url: string) => {
     if (!currentUser) {
       alert('Please select a user first');
@@ -175,10 +205,12 @@ function App() {
     setIsScraping(true);
     setScrapingType(type);
     setLoadingError('');
+    setCanCancelScraping(true);
     updateLoadingProgress('starting', 0, 'Initializing scraping process...');
     
     // Create local job
     const job = LocalStorageService.createJob(currentUser.id, type, url);
+    setCurrentJobId(job.id);
     setScrapingJobs(prev => [job, ...prev]);
     
     try {
@@ -215,7 +247,14 @@ function App() {
           .map(u => u.trim())
           .filter(u => u.length > 0);
         
-        const profilesData = await getProfilesWithOptimization(profileUrls, apifyService);
+        setTotalProfileCount(profileUrls.length);
+        
+        const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, (current, total) => {
+          setCurrentProfileCount(current);
+          setTotalProfileCount(total);
+          const progressPercent = total > 0 ? (current / total) * 100 : 0;
+          updateLoadingProgress('scraping_profiles', 25 + (progressPercent * 0.5), `Scraping profiles: ${current}/${total}`);
+        });
         
         updateLoadingProgress('saving_data', 75, 'Saving profile data...');
         setProfileDetails(profilesData);
@@ -248,9 +287,14 @@ function App() {
           .slice(0, 50);
         
         if (profileUrls.length > 0) {
+          setTotalProfileCount(profileUrls.length);
           updateLoadingProgress('scraping_profiles', 60, `Checking and scraping ${profileUrls.length} profiles...`);
           
-          const profilesData = await getProfilesWithOptimization(profileUrls, apifyService);
+          const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, (current, total) => {
+            setCurrentProfileCount(current);
+            const progressPercent = total > 0 ? (current / total) * 100 : 0;
+            updateLoadingProgress('scraping_profiles', 60 + (progressPercent * 0.25), `Scraping profiles: ${current}/${total}`);
+          });
           
           updateLoadingProgress('saving_data', 85, 'Saving all data...');
           setProfileDetails(profilesData);
@@ -294,10 +338,18 @@ function App() {
       
     } finally {
       setIsScraping(false);
+      setCanCancelScraping(false);
+      setCurrentJobId(null);
+      setCurrentProfileCount(0);
+      setTotalProfileCount(0);
     }
   };
 
-  const getProfilesWithOptimization = async (profileUrls: string[], apifyService: any): Promise<any[]> => {
+  const getProfilesWithOptimization = async (
+    profileUrls: string[], 
+    apifyService: any, 
+    onProgress?: (current: number, total: number) => void
+  ): Promise<any[]> => {
     const results: any[] = [];
     const urlsToScrape: string[] = [];
     let savedCost = 0;
@@ -324,7 +376,7 @@ function App() {
     if (urlsToScrape.length > 0) {
       updateLoadingProgress('scraping_profiles', 50, `Scraping ${urlsToScrape.length} new profiles (saved ${savedCost} API calls)...`);
       
-      const datasetId = await apifyService.scrapeProfiles(urlsToScrape);
+      const datasetId = await apifyService.scrapeProfiles(urlsToScrape, onProgress);
       const newProfilesData = await apifyService.getDatasetItems(datasetId);
       
       updateLoadingProgress('scraping_profiles', 70, 'Saving new profiles to database...');
@@ -378,15 +430,22 @@ function App() {
     setIsScraping(true);
     setScrapingType('profile_details');
     setLoadingError('');
+    setCanCancelScraping(true);
+    setTotalProfileCount(profileUrls.length);
     updateLoadingProgress('scraping_profiles', 25, `Checking and scraping ${profileUrls.length} selected profiles...`);
     
     // Create local job
     const job = LocalStorageService.createJob(currentUser.id, 'profile_details', profileUrls.join(','));
+    setCurrentJobId(job.id);
     setScrapingJobs(prev => [job, ...prev]);
     
     try {
       const apifyService = createApifyService(selectedKey.apiKey);
-      const profilesData = await getProfilesWithOptimization(profileUrls, apifyService);
+      const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, (current, total) => {
+        setCurrentProfileCount(current);
+        const progressPercent = total > 0 ? (current / total) * 100 : 0;
+        updateLoadingProgress('scraping_profiles', 25 + (progressPercent * 0.5), `Scraping profiles: ${current}/${total}`);
+      });
       
       updateLoadingProgress('saving_data', 75, 'Processing profile data...');
       setProfileDetails(profilesData);
@@ -424,6 +483,10 @@ function App() {
       setScrapingJobs(prev => prev.map(j => j.id === job.id ? failedJob : j));
     } finally {
       setIsScraping(false);
+      setCanCancelScraping(false);
+      setCurrentJobId(null);
+      setCurrentProfileCount(0);
+      setTotalProfileCount(0);
     }
   };
 
@@ -542,7 +605,7 @@ function App() {
     }
   };
 
-  const handleTabChange = async (tab: 'scraper' | 'profiles' | 'jobs' | 'storage') => {
+  const handleTabChange = async (tab: 'scraper' | 'profiles' | 'jobs' | 'feedback') => {
     setActiveTab(tab);
     
     if (tab === 'profiles') {
@@ -562,8 +625,8 @@ function App() {
       }
     } else if (tab === 'jobs') {
       setCurrentView('form');
-    } else if (tab === 'storage') {
-      setCurrentView('storage');
+    } else if (tab === 'feedback') {
+      setCurrentView('feedback');
     }
   };
 
@@ -685,15 +748,15 @@ function App() {
                   Jobs ({scrapingJobs.length})
                 </button>
                 <button
-                  onClick={() => handleTabChange('storage')}
+                  onClick={() => handleTabChange('feedback')}
                   className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                    activeTab === 'storage'
+                    activeTab === 'feedback'
                       ? 'bg-blue-100 text-blue-700'
                       : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
                   }`}
                 >
-                  <HardDrive className="w-4 h-4 inline mr-2" />
-                  Storage
+                  <MessageCircle className="w-4 h-4 inline mr-2" />
+                  Feedback
                 </button>
               </nav>
               
@@ -749,8 +812,8 @@ function App() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {currentView === 'storage' ? (
-          <StorageManager />
+        {currentView === 'feedback' ? (
+          <FeedbackPage />
         ) : (
           <>
             {/* API Key Management */}
@@ -781,6 +844,10 @@ function App() {
                         progress={loadingProgress}
                         message={loadingMessage}
                         error={loadingError}
+                        currentCount={currentProfileCount}
+                        totalCount={totalProfileCount}
+                        onCancel={handleCancelScraping}
+                        canCancel={canCancelScraping}
                       />
                     )}
                     
