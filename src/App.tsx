@@ -65,6 +65,11 @@ function App() {
   const [totalProfileCount, setTotalProfileCount] = useState(0);
   const [canCancelScraping, setCanCancelScraping] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  
+  // Multiple URL tracking
+  const [currentUrlIndex, setCurrentUrlIndex] = useState(0);
+  const [totalUrls, setTotalUrls] = useState(0);
+  const [urlResults, setUrlResults] = useState<{url: string; status: 'pending' | 'processing' | 'completed' | 'failed'; results?: any[]; error?: string}[]>([]);
 
   // Initialize app
   useEffect(() => {
@@ -84,29 +89,23 @@ function App() {
     const jobs = LocalStorageService.getJobs(userId);
     setScrapingJobs(jobs);
     
-    // FIXED: Load user-specific profiles only
     try {
       console.log('📊 Loading data for user:', userId);
       
-      // Get user's local profiles
       const localProfiles = LocalStorageService.getUserProfiles(userId);
       console.log('📱 Local profiles for user:', localProfiles.length);
       
-      // Get user's Supabase profiles
       const supabaseProfiles = await SupabaseProfilesService.getUserProfiles(userId);
       console.log('☁️ Supabase profiles for user:', supabaseProfiles.length);
       
-      // Merge profiles, prioritizing the most recently updated
       const mergedProfiles = mergeProfiles(localProfiles, supabaseProfiles);
       
-      // Save merged profiles back to user-specific local storage
       LocalStorageService.saveUserProfiles(userId, mergedProfiles);
       setProfiles(mergedProfiles);
       
       console.log(`✅ Loaded ${localProfiles.length} local + ${supabaseProfiles.length} Supabase = ${mergedProfiles.length} merged profiles for user ${userId}`);
     } catch (error) {
       console.error('❌ Error loading user data:', error);
-      // Fallback to local profiles only
       const localProfiles = LocalStorageService.getUserProfiles(userId);
       setProfiles(localProfiles);
       console.log('⚠️ Fallback: Using local profiles only:', localProfiles.length);
@@ -116,12 +115,10 @@ function App() {
   const mergeProfiles = (localProfiles: any[], supabaseProfiles: any[]): any[] => {
     const profileMap = new Map();
     
-    // Add local profiles first
     localProfiles.forEach(profile => {
       profileMap.set(profile.linkedin_url, profile);
     });
     
-    // Add or update with Supabase profiles, prioritizing more recent updates
     supabaseProfiles.forEach(supabaseProfile => {
       const url = supabaseProfile.linkedin_url;
       const existing = profileMap.get(url);
@@ -160,7 +157,6 @@ function App() {
 
   const handleCancelScraping = () => {
     if (currentJobId) {
-      // Update job status to cancelled
       const job = scrapingJobs.find(j => j.id === currentJobId);
       if (job) {
         const cancelledJob: LocalJob = {
@@ -179,10 +175,13 @@ function App() {
     setCurrentJobId(null);
     setCurrentProfileCount(0);
     setTotalProfileCount(0);
+    setCurrentUrlIndex(0);
+    setTotalUrls(0);
+    setUrlResults([]);
     updateLoadingProgress('error', 0, 'Scraping cancelled by user');
   };
 
-  const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', url: string) => {
+  const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', urls: string[]) => {
     if (!currentUser) {
       alert('Please select a user first');
       return;
@@ -193,7 +192,6 @@ function App() {
       return;
     }
 
-    // Get the selected API key
     const keys = LocalStorageService.getApifyKeys(currentUser.id);
     const selectedKey = keys.find(k => k.id === selectedKeyId);
 
@@ -206,114 +204,141 @@ function App() {
     setScrapingType(type);
     setLoadingError('');
     setCanCancelScraping(true);
-    updateLoadingProgress('starting', 0, 'Initializing scraping process...');
+    setTotalUrls(urls.length);
+    setCurrentUrlIndex(0);
     
-    // Create local job
-    const job = LocalStorageService.createJob(currentUser.id, type, url);
+    // Initialize URL results tracking
+    const initialResults = urls.map(url => ({
+      url,
+      status: 'pending' as const
+    }));
+    setUrlResults(initialResults);
+    
+    updateLoadingProgress('starting', 0, `Initializing scraping for ${urls.length} URL${urls.length > 1 ? 's' : ''}...`);
+    
+    const job = LocalStorageService.createJob(currentUser.id, type, urls.join('\n'));
     setCurrentJobId(job.id);
     setScrapingJobs(prev => [job, ...prev]);
     
     try {
       const apifyService = createApifyService(selectedKey.apiKey);
+      let allResults: any[] = [];
+      let totalResultsCount = 0;
 
+      for (let i = 0; i < urls.length; i++) {
+        if (!isScraping) break; // Check if cancelled
+        
+        const url = urls[i];
+        setCurrentUrlIndex(i);
+        
+        // Update URL status to processing
+        setUrlResults(prev => prev.map((result, index) => 
+          index === i ? { ...result, status: 'processing' } : result
+        ));
+
+        try {
+          updateLoadingProgress('starting', (i / urls.length) * 100, `Processing URL ${i + 1}/${urls.length}: ${url.substring(0, 50)}...`);
+
+          if (type === 'post_comments') {
+            updateLoadingProgress('scraping_comments', (i / urls.length) * 100, `Extracting comments from post ${i + 1}/${urls.length}...`);
+            
+            const datasetId = await apifyService.scrapePostComments(url);
+            const commentsData = await apifyService.getDatasetItems(datasetId);
+            
+            allResults.push(...commentsData);
+            totalResultsCount += commentsData.length;
+            
+            // Update URL status to completed
+            setUrlResults(prev => prev.map((result, index) => 
+              index === i ? { ...result, status: 'completed', results: commentsData } : result
+            ));
+
+          } else if (type === 'profile_details') {
+            updateLoadingProgress('scraping_profiles', (i / urls.length) * 100, `Scraping profile ${i + 1}/${urls.length}...`);
+            
+            const profilesData = await getProfilesWithOptimization([url], apifyService, (current, total) => {
+              setCurrentProfileCount(current);
+              setTotalProfileCount(total);
+              const urlProgress = (i / urls.length) * 100;
+              const profileProgress = total > 0 ? (current / total) * (100 / urls.length) : 0;
+              updateLoadingProgress('scraping_profiles', urlProgress + profileProgress, `Scraping profile ${i + 1}/${urls.length}: ${current}/${total}`);
+            });
+            
+            allResults.push(...profilesData);
+            totalResultsCount += profilesData.length;
+            
+            setUrlResults(prev => prev.map((result, index) => 
+              index === i ? { ...result, status: 'completed', results: profilesData } : result
+            ));
+
+          } else if (type === 'mixed') {
+            updateLoadingProgress('scraping_comments', (i / urls.length) * 50, `Extracting comments from post ${i + 1}/${urls.length}...`);
+            
+            const datasetId = await apifyService.scrapePostComments(url);
+            const commentsData = await apifyService.getDatasetItems(datasetId);
+            
+            updateLoadingProgress('extracting_profiles', (i / urls.length) * 50 + 25, `Extracting profile URLs from post ${i + 1}/${urls.length}...`);
+            
+            const profileUrls = commentsData
+              .map(comment => comment.actor?.linkedinUrl)
+              .filter(Boolean)
+              .slice(0, 50);
+            
+            if (profileUrls.length > 0) {
+              setTotalProfileCount(profileUrls.length);
+              updateLoadingProgress('scraping_profiles', (i / urls.length) * 50 + 50, `Scraping ${profileUrls.length} profiles from post ${i + 1}/${urls.length}...`);
+              
+              const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, (current, total) => {
+                setCurrentProfileCount(current);
+                const urlProgress = (i / urls.length) * 50 + 50;
+                const profileProgress = total > 0 ? (current / total) * (50 / urls.length) : 0;
+                updateLoadingProgress('scraping_profiles', urlProgress + profileProgress, `Post ${i + 1}/${urls.length}: Scraping profiles ${current}/${total}`);
+              });
+              
+              allResults.push(...profilesData);
+              totalResultsCount += profilesData.length;
+            }
+            
+            setUrlResults(prev => prev.map((result, index) => 
+              index === i ? { ...result, status: 'completed', results: profileUrls } : result
+            ));
+          }
+
+        } catch (urlError) {
+          console.error(`❌ Error processing URL ${i + 1}:`, urlError);
+          
+          setUrlResults(prev => prev.map((result, index) => 
+            index === i ? { 
+              ...result, 
+              status: 'failed', 
+              error: urlError instanceof Error ? urlError.message : 'Unknown error'
+            } : result
+          ));
+        }
+      }
+
+      updateLoadingProgress('saving_data', 90, 'Saving all scraped data...');
+
+      // Set results based on scraping type
       if (type === 'post_comments') {
-        updateLoadingProgress('scraping_comments', 25, 'Extracting comments from LinkedIn post...');
-        
-        const datasetId = await apifyService.scrapePostComments(url);
-        
-        updateLoadingProgress('saving_data', 75, 'Processing comment data...');
-        const commentsData = await apifyService.getDatasetItems(datasetId);
-        
-        setCommentersData(commentsData);
+        setCommentersData(allResults);
         setCurrentView('comments');
-        
-        updateLoadingProgress('completed', 100, 'Comments extracted successfully!');
-        
-        // Update job
-        const completedJob: LocalJob = {
-          ...job,
-          status: 'completed',
-          resultsCount: commentsData.length,
-          completedAt: new Date().toISOString()
-        };
-        LocalStorageService.saveJob(completedJob);
-        setScrapingJobs(prev => prev.map(j => j.id === job.id ? completedJob : j));
-
-      } else if (type === 'profile_details') {
-        updateLoadingProgress('scraping_profiles', 25, 'Checking existing profiles...');
-        
-        // Parse profile URLs properly - split by newlines and filter empty strings
-        const profileUrls = url.split('\n')
-          .map(u => u.trim())
-          .filter(u => u.length > 0);
-        
-        setTotalProfileCount(profileUrls.length);
-        
-        const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, (current, total) => {
-          setCurrentProfileCount(current);
-          setTotalProfileCount(total);
-          const progressPercent = total > 0 ? (current / total) * 100 : 0;
-          updateLoadingProgress('scraping_profiles', 25 + (progressPercent * 0.5), `Scraping profiles: ${current}/${total}`);
-        });
-        
-        updateLoadingProgress('saving_data', 75, 'Saving profile data...');
-        setProfileDetails(profilesData);
+      } else {
+        setProfileDetails(allResults);
         setPreviousView('form');
         setCurrentView('profile-table');
-        
-        updateLoadingProgress('completed', 100, 'Profile details scraped successfully!');
-        
-        // Update job
-        const completedJob: LocalJob = {
-          ...job,
-          status: 'completed',
-          resultsCount: profilesData.length,
-          completedAt: new Date().toISOString()
-        };
-        LocalStorageService.saveJob(completedJob);
-        setScrapingJobs(prev => prev.map(j => j.id === job.id ? completedJob : j));
-
-      } else if (type === 'mixed') {
-        updateLoadingProgress('scraping_comments', 20, 'Extracting comments from LinkedIn post...');
-        
-        const datasetId = await apifyService.scrapePostComments(url);
-        const commentsData = await apifyService.getDatasetItems(datasetId);
-        
-        updateLoadingProgress('extracting_profiles', 40, 'Extracting profile URLs from comments...');
-        
-        const profileUrls = commentsData
-          .map(comment => comment.actor?.linkedinUrl)
-          .filter(Boolean)
-          .slice(0, 50);
-        
-        if (profileUrls.length > 0) {
-          setTotalProfileCount(profileUrls.length);
-          updateLoadingProgress('scraping_profiles', 60, `Checking and scraping ${profileUrls.length} profiles...`);
-          
-          const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, (current, total) => {
-            setCurrentProfileCount(current);
-            const progressPercent = total > 0 ? (current / total) * 100 : 0;
-            updateLoadingProgress('scraping_profiles', 60 + (progressPercent * 0.25), `Scraping profiles: ${current}/${total}`);
-          });
-          
-          updateLoadingProgress('saving_data', 85, 'Saving all data...');
-          setProfileDetails(profilesData);
-          setPreviousView('form');
-          setCurrentView('profile-table');
-        }
-
-        updateLoadingProgress('completed', 100, 'Mixed scraping completed successfully!');
-        
-        // Update job
-        const completedJob: LocalJob = {
-          ...job,
-          status: 'completed',
-          resultsCount: profileUrls.length,
-          completedAt: new Date().toISOString()
-        };
-        LocalStorageService.saveJob(completedJob);
-        setScrapingJobs(prev => prev.map(j => j.id === job.id ? completedJob : j));
       }
+
+      updateLoadingProgress('completed', 100, `Successfully processed ${urls.length} URL${urls.length > 1 ? 's' : ''} with ${totalResultsCount} total results!`);
+      
+      const completedJob: LocalJob = {
+        ...job,
+        status: 'completed',
+        resultsCount: totalResultsCount,
+        completedAt: new Date().toISOString()
+      };
+      LocalStorageService.saveJob(completedJob);
+      setScrapingJobs(prev => prev.map(j => j.id === job.id ? completedJob : j));
 
     } catch (error) {
       console.error('❌ Scraping error:', error);
@@ -326,7 +351,6 @@ function App() {
       setLoadingError(errorMessage);
       updateLoadingProgress('error', 0, 'Scraping failed');
       
-      // Update job with error
       const failedJob: LocalJob = {
         ...job,
         status: 'failed',
@@ -342,6 +366,8 @@ function App() {
       setCurrentJobId(null);
       setCurrentProfileCount(0);
       setTotalProfileCount(0);
+      setCurrentUrlIndex(0);
+      setTotalUrls(0);
     }
   };
 
@@ -356,11 +382,12 @@ function App() {
     
     updateLoadingProgress('scraping_profiles', 30, 'Checking for existing profiles...');
     
-    // FIXED: Check each URL in Supabase for this specific user
     for (const url of profileUrls) {
       try {
-        const existingProfile = await SupabaseProfilesService.checkProfileExists(url, currentUser!.id);
+        const existingProfile = await SupabaseProfilesService.checkProfileExists(url);
         if (existingProfile) {
+          // Add existing profile to user's collection
+          await SupabaseProfilesService.addProfileToUser(url, currentUser!.id);
           results.push(existingProfile.profile_data);
           savedCost++;
         } else {
@@ -368,7 +395,6 @@ function App() {
         }
       } catch (error) {
         console.error('❌ Error checking profile existence for', url, ':', error);
-        // If there's an error checking, add to scrape list to be safe
         urlsToScrape.push(url);
       }
     }
@@ -381,14 +407,11 @@ function App() {
       
       updateLoadingProgress('scraping_profiles', 70, 'Saving new profiles to database...');
       
-      // Save new profiles to Supabase and local storage for this user
       for (const profileData of newProfilesData) {
         if (profileData.linkedinUrl) {
           try {
-            // Save to Supabase (central storage) for this user
             await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
             
-            // Save to user-specific local storage (cache)
             LocalStorageService.addUserProfile(currentUser!.id, {
               linkedin_url: profileData.linkedinUrl,
               profile_data: profileData,
@@ -398,7 +421,7 @@ function App() {
             results.push(profileData);
           } catch (saveError) {
             console.error('❌ Error saving profile:', profileData.linkedinUrl, saveError);
-            results.push(profileData); // Still include in results for display
+            results.push(profileData);
           }
         }
       }
@@ -406,7 +429,6 @@ function App() {
     
     updateLoadingProgress('scraping_profiles', 90, `Completed! Saved ${savedCost} API calls by using cached profiles.`);
     
-    // Update local profiles cache for this user
     const updatedProfiles = LocalStorageService.getUserProfiles(currentUser!.id);
     setProfiles(updatedProfiles);
     
@@ -434,7 +456,6 @@ function App() {
     setTotalProfileCount(profileUrls.length);
     updateLoadingProgress('scraping_profiles', 25, `Checking and scraping ${profileUrls.length} selected profiles...`);
     
-    // Create local job
     const job = LocalStorageService.createJob(currentUser.id, 'profile_details', profileUrls.join(','));
     setCurrentJobId(job.id);
     setScrapingJobs(prev => [job, ...prev]);
@@ -453,7 +474,6 @@ function App() {
       setCurrentView('profile-table');
       updateLoadingProgress('completed', 100, 'Selected profiles scraped successfully!');
       
-      // Update job
       const completedJob: LocalJob = {
         ...job,
         status: 'completed',
@@ -472,7 +492,6 @@ function App() {
       setLoadingError(errorMessage);
       updateLoadingProgress('error', 0, 'Failed to scrape selected profiles');
       
-      // Update job with error
       const failedJob: LocalJob = {
         ...job,
         status: 'failed',
@@ -498,10 +517,8 @@ function App() {
       
       for (const profile of profilesToStore) {
         if (profile.linkedinUrl) {
-          // Save to Supabase for this user
           await SupabaseProfilesService.saveProfile(profile, currentUser.id);
           
-          // Save to user-specific local storage
           LocalStorageService.addUserProfile(currentUser.id, {
             linkedin_url: profile.linkedinUrl,
             profile_data: profile,
@@ -511,7 +528,6 @@ function App() {
         }
       }
       
-      // Update local profiles for this user
       const updatedProfiles = LocalStorageService.getUserProfiles(currentUser.id);
       setProfiles(updatedProfiles);
       
@@ -542,7 +558,6 @@ function App() {
       const profilesData = await getProfilesWithOptimization([profileUrl], apifyService);
       
       if (profilesData.length > 0) {
-        // Refresh profiles list for this user
         await loadUserData(currentUser.id);
         alert('Profile updated successfully!');
       }
@@ -570,7 +585,6 @@ function App() {
       const apifyService = createApifyService(selectedKey.apiKey);
       await getProfilesWithOptimization(profileUrls, apifyService);
       
-      // Refresh profiles list for this user
       await loadUserData(currentUser.id);
       alert(`Successfully updated ${profileUrls.length} profiles!`);
     } catch (error) {
@@ -583,19 +597,16 @@ function App() {
     if (!currentUser) return;
     
     try {
-      // Remove from user-specific local storage
       const currentProfiles = LocalStorageService.getUserProfiles(currentUser.id);
       const filteredProfiles = currentProfiles.filter(p => !profileIds.includes(p.id));
       LocalStorageService.saveUserProfiles(currentUser.id, filteredProfiles);
       
-      // Also try to remove from Supabase (for this user only)
       try {
         await SupabaseProfilesService.deleteProfiles(profileIds, currentUser.id);
       } catch (supabaseError) {
         console.warn('⚠️ Could not delete from Supabase, but removed from local storage:', supabaseError);
       }
       
-      // Update state
       setProfiles(filteredProfiles);
       
       alert(`Successfully deleted ${profileIds.length} profiles`);
@@ -610,7 +621,6 @@ function App() {
     
     if (tab === 'profiles') {
       setCurrentView('profiles-list');
-      // Load user-specific profiles for profiles tab
       if (currentUser) {
         const userProfiles = LocalStorageService.getUserProfiles(currentUser.id);
         setProfiles(userProfiles);
@@ -618,7 +628,6 @@ function App() {
       }
     } else if (tab === 'scraper') {
       setCurrentView('form');
-      // Load user-specific profiles cache for scraper tab
       if (currentUser) {
         const userProfiles = LocalStorageService.getUserProfiles(currentUser.id);
         setProfiles(userProfiles);
@@ -648,6 +657,7 @@ function App() {
     setLoadingProgress(0);
     setLoadingMessage('');
     setLoadingError('');
+    setUrlResults([]);
   };
 
   const handleBackToPrevious = () => {
@@ -850,6 +860,53 @@ function App() {
                         canCancel={canCancelScraping}
                       />
                     )}
+
+                    {/* URL Results Progress */}
+                    {urlResults.length > 0 && (
+                      <div className="bg-white rounded-xl shadow-lg border border-gray-100 p-6">
+                        <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                          Processing Progress ({currentUrlIndex + 1}/{totalUrls})
+                        </h3>
+                        <div className="space-y-3">
+                          {urlResults.map((result, index) => (
+                            <div key={index} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                              <div className={`w-3 h-3 rounded-full ${
+                                result.status === 'completed' ? 'bg-green-500' :
+                                result.status === 'processing' ? 'bg-blue-500 animate-pulse' :
+                                result.status === 'failed' ? 'bg-red-500' : 'bg-gray-300'
+                              }`} />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-medium text-gray-900 truncate">
+                                  {result.url}
+                                </div>
+                                {result.status === 'completed' && result.results && (
+                                  <div className="text-xs text-green-600">
+                                    ✓ {result.results.length} results
+                                  </div>
+                                )}
+                                {result.status === 'failed' && result.error && (
+                                  <div className="text-xs text-red-600">
+                                    ✗ {result.error}
+                                  </div>
+                                )}
+                                {result.status === 'processing' && (
+                                  <div className="text-xs text-blue-600">
+                                    Processing...
+                                  </div>
+                                )}
+                              </div>
+                              <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                                result.status === 'completed' ? 'bg-green-100 text-green-800' :
+                                result.status === 'processing' ? 'bg-blue-100 text-blue-800' :
+                                result.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800'
+                              }`}>
+                                {result.status}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     
                     {/* Stats */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -961,7 +1018,6 @@ function App() {
               <LocalJobsTable 
                 jobs={scrapingJobs} 
                 onCancelJob={(jobId) => {
-                  // Refresh jobs after cancellation
                   const updatedJobs = LocalStorageService.getJobs(currentUser.id);
                   setScrapingJobs(updatedJobs);
                 }}

@@ -1,32 +1,61 @@
 import React, { useState } from 'react';
-import { Search, Users, UserCheck, Loader2, AlertTriangle } from 'lucide-react';
+import { Search, Users, UserCheck, Loader2, AlertTriangle, Plus, X } from 'lucide-react';
 
 interface ScrapingFormProps {
-  onScrape: (type: 'post_comments' | 'profile_details' | 'mixed', url: string) => Promise<void>;
+  onScrape: (type: 'post_comments' | 'profile_details' | 'mixed', urls: string[]) => Promise<void>;
   isLoading: boolean;
   disabled?: boolean;
 }
 
 export const ScrapingForm: React.FC<ScrapingFormProps> = ({ onScrape, isLoading, disabled = false }) => {
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
-  const [url, setUrl] = useState('');
+  const [urls, setUrls] = useState<string[]>(['']);
+  const [showMultipleUrls, setShowMultipleUrls] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!url.trim() || disabled) return;
+    if (disabled) return;
     
-    await onScrape(scrapingType, url.trim());
-    setUrl('');
+    // Filter out empty URLs and trim whitespace
+    const validUrls = urls
+      .map(url => url.trim())
+      .filter(url => url.length > 0);
+    
+    if (validUrls.length === 0) return;
+    
+    await onScrape(scrapingType, validUrls);
+    setUrls(['']);
+    setShowMultipleUrls(false);
   };
 
-  const getPlaceholder = () => {
+  const addUrlField = () => {
+    setUrls(prev => [...prev, '']);
+  };
+
+  const removeUrlField = (index: number) => {
+    if (urls.length > 1) {
+      setUrls(prev => prev.filter((_, i) => i !== index));
+    }
+  };
+
+  const updateUrl = (index: number, value: string) => {
+    setUrls(prev => prev.map((url, i) => i === index ? value : url));
+  };
+
+  const getPlaceholder = (index: number = 0) => {
     switch (scrapingType) {
       case 'post_comments':
-        return 'https://www.linkedin.com/posts/...';
+        return index === 0 
+          ? 'https://www.linkedin.com/posts/...' 
+          : `Post URL ${index + 1}`;
       case 'profile_details':
-        return 'https://www.linkedin.com/in/username';
+        return index === 0 
+          ? 'https://www.linkedin.com/in/username' 
+          : `Profile URL ${index + 1}`;
       case 'mixed':
-        return 'https://www.linkedin.com/posts/... (will scrape post + profiles)';
+        return index === 0 
+          ? 'https://www.linkedin.com/posts/... (will scrape post + profiles)' 
+          : `Post URL ${index + 1}`;
       default:
         return '';
     }
@@ -45,13 +74,31 @@ export const ScrapingForm: React.FC<ScrapingFormProps> = ({ onScrape, isLoading,
     }
   };
 
+  const getDescription = () => {
+    switch (scrapingType) {
+      case 'post_comments':
+        return 'Extract commenters from LinkedIn posts. You can scrape multiple posts at once.';
+      case 'profile_details':
+        return 'Extract detailed information from LinkedIn profiles. Add multiple profile URLs to scrape them all.';
+      case 'mixed':
+        return 'Extract commenters from posts and their full profile details. Process multiple posts simultaneously.';
+      default:
+        return '';
+    }
+  };
+
+  const validUrls = urls.filter(url => url.trim().length > 0);
+
   return (
     <div className="bg-white rounded-xl shadow-lg p-8 border border-gray-100">
       <div className="flex items-center gap-3 mb-6">
         <div className="p-2 bg-blue-100 rounded-lg">
           {getIcon()}
         </div>
-        <h2 className="text-2xl font-bold text-gray-900">LinkedIn Scraper</h2>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">LinkedIn Scraper</h2>
+          <p className="text-gray-600 text-sm mt-1">{getDescription()}</p>
+        </div>
       </div>
 
       {disabled && (
@@ -118,35 +165,86 @@ export const ScrapingForm: React.FC<ScrapingFormProps> = ({ onScrape, isLoading,
         </div>
 
         <div>
-          <label htmlFor="url" className="block text-sm font-medium text-gray-700 mb-2">
-            LinkedIn URL
-          </label>
-          <input
-            type="url"
-            id="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder={getPlaceholder()}
-            disabled={disabled}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-            required
-          />
+          <div className="flex items-center justify-between mb-2">
+            <label htmlFor="urls" className="block text-sm font-medium text-gray-700">
+              LinkedIn URL{urls.length > 1 ? 's' : ''}
+            </label>
+            <div className="flex items-center gap-2">
+              {!showMultipleUrls && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMultipleUrls(true);
+                    if (urls.length === 1 && !urls[0]) {
+                      setUrls(['', '']);
+                    }
+                  }}
+                  disabled={disabled}
+                  className="text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                >
+                  + Add multiple URLs
+                </button>
+              )}
+              {validUrls.length > 0 && (
+                <span className="text-sm text-gray-500">
+                  {validUrls.length} URL{validUrls.length !== 1 ? 's' : ''} ready
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {urls.map((url, index) => (
+              <div key={index} className="flex gap-2">
+                <input
+                  type="url"
+                  value={url}
+                  onChange={(e) => updateUrl(index, e.target.value)}
+                  placeholder={getPlaceholder(index)}
+                  disabled={disabled}
+                  className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+                {urls.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => removeUrlField(index)}
+                    disabled={disabled}
+                    className="px-3 py-3 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {showMultipleUrls && (
+            <button
+              type="button"
+              onClick={addUrlField}
+              disabled={disabled}
+              className="mt-3 flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
+            >
+              <Plus className="w-4 h-4" />
+              Add another URL
+            </button>
+          )}
         </div>
 
         <button
           type="submit"
-          disabled={isLoading || !url.trim() || disabled}
+          disabled={isLoading || validUrls.length === 0 || disabled}
           className="w-full bg-blue-600 text-white py-3 px-6 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
         >
           {isLoading ? (
             <>
               <Loader2 className="w-5 h-5 animate-spin" />
-              Scraping...
+              Scraping {validUrls.length} URL{validUrls.length !== 1 ? 's' : ''}...
             </>
           ) : (
             <>
               {getIcon()}
-              Start Scraping
+              Start Scraping {validUrls.length > 1 ? `${validUrls.length} URLs` : ''}
             </>
           )}
         </button>

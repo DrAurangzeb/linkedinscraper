@@ -11,6 +11,8 @@ interface LoadingProgressProps {
   totalCount?: number;
   onCancel?: () => void;
   canCancel?: boolean;
+  currentUrl?: number;
+  totalUrls?: number;
 }
 
 export const LoadingProgress: React.FC<LoadingProgressProps> = ({
@@ -22,7 +24,9 @@ export const LoadingProgress: React.FC<LoadingProgressProps> = ({
   currentCount,
   totalCount,
   onCancel,
-  canCancel = false
+  canCancel = false,
+  currentUrl,
+  totalUrls
 }) => {
   const getIcon = () => {
     switch (type) {
@@ -117,6 +121,11 @@ export const LoadingProgress: React.FC<LoadingProgressProps> = ({
           <div className="flex items-center justify-between">
             <h3 className="text-xl font-bold text-gray-900 mb-1">
               {getTypeTitle()}
+              {totalUrls && totalUrls > 1 && currentUrl !== undefined && (
+                <span className="text-sm font-normal text-gray-600 ml-2">
+                  (URL {currentUrl + 1}/{totalUrls})
+                </span>
+              )}
             </h3>
             
             {canCancel && onCancel && stage !== 'completed' && stage !== 'error' && (
@@ -142,6 +151,18 @@ export const LoadingProgress: React.FC<LoadingProgressProps> = ({
               </div>
               <div className="text-xs text-gray-500">
                 {totalCount > 0 ? Math.round((currentCount / totalCount) * 100) : 0}% complete
+              </div>
+            </div>
+          )}
+
+          {/* Multiple URLs Progress */}
+          {totalUrls && totalUrls > 1 && (
+            <div className="mt-2 flex items-center gap-4">
+              <div className="text-sm font-medium text-purple-600">
+                URLs: {(currentUrl || 0) + 1}/{totalUrls}
+              </div>
+              <div className="text-xs text-gray-500">
+                {Math.round(((currentUrl || 0) / totalUrls) * 100)}% of URLs processed
               </div>
             </div>
           )}
