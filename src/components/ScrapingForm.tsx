@@ -11,21 +11,37 @@ export const ScrapingForm: React.FC<ScrapingFormProps> = ({ onScrape, isLoading,
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
   const [urls, setUrls] = useState<string[]>(['']);
   const [showMultipleUrls, setShowMultipleUrls] = useState(false);
+  const [bulkInput, setBulkInput] = useState('');
+  const [useBulkInput, setUseBulkInput] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (disabled) return;
     
-    // Filter out empty URLs and trim whitespace
-    const validUrls = urls
-      .map(url => url.trim())
-      .filter(url => url.length > 0);
+    let validUrls: string[] = [];
+    
+    if (useBulkInput) {
+      // Parse bulk input
+      validUrls = bulkInput
+        .split('\n')
+        .map(url => url.trim())
+        .filter(url => url.length > 0);
+    } else {
+      // Filter out empty URLs and trim whitespace
+      validUrls = urls
+        .map(url => url.trim())
+        .filter(url => url.length > 0);
+    }
     
     if (validUrls.length === 0) return;
     
     await onScrape(scrapingType, validUrls);
+    
+    // Reset form
     setUrls(['']);
+    setBulkInput('');
     setShowMultipleUrls(false);
+    setUseBulkInput(false);
   };
 
   const addUrlField = () => {
@@ -39,39 +55,76 @@ export const ScrapingForm: React.FC<ScrapingFormProps> = ({ onScrape, isLoading,
   };
 
   const updateUrl = (index: number, value: string) => {
-    // Check if the pasted content contains multiple lines
-    if (value.includes('\n')) {
-      const lines = value
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0);
-      
-      if (lines.length > 1) {
-        // Multiple URLs detected - replace current URLs with the new ones
-        setUrls(lines);
-        setShowMultipleUrls(true);
-        return;
-      }
-    }
-    
-    // Single URL update (original behavior)
     setUrls(prev => prev.map((url, i) => i === index ? value : url));
+  };
+
+  const handleBulkInputChange = (value: string) => {
+    setBulkInput(value);
+  };
+
+  const switchToBulkInput = () => {
+    // Convert current URLs to bulk input
+    const currentUrls = urls.filter(url => url.trim().length > 0);
+    setBulkInput(currentUrls.join('\n'));
+    setUseBulkInput(true);
+  };
+
+  const switchToIndividualInputs = () => {
+    // Convert bulk input to individual URLs
+    const urlsFromBulk = bulkInput
+      .split('\n')
+      .map(url => url.trim())
+      .filter(url => url.length > 0);
+    
+    if (urlsFromBulk.length > 0) {
+      setUrls(urlsFromBulk);
+      setShowMultipleUrls(urlsFromBulk.length > 1);
+    } else {
+      setUrls(['']);
+      setShowMultipleUrls(false);
+    }
+    setUseBulkInput(false);
   };
 
   const getPlaceholder = (index: number = 0) => {
     switch (scrapingType) {
       case 'post_comments':
         return index === 0 
-          ? 'https://www.linkedin.com/posts/... (paste multiple URLs, one per line)' 
+          ? 'https://www.linkedin.com/posts/...' 
           : `Post URL ${index + 1}`;
       case 'profile_details':
         return index === 0 
-          ? 'https://www.linkedin.com/in/username (paste multiple URLs, one per line)' 
+          ? 'https://www.linkedin.com/in/username' 
           : `Profile URL ${index + 1}`;
       case 'mixed':
         return index === 0 
-          ? 'https://www.linkedin.com/posts/... (paste multiple URLs, one per line)' 
+          ? 'https://www.linkedin.com/posts/... (will scrape post + profiles)' 
           : `Post URL ${index + 1}`;
+      default:
+        return '';
+    }
+  };
+
+  const getBulkPlaceholder = () => {
+    switch (scrapingType) {
+      case 'post_comments':
+        return `Paste multiple LinkedIn post URLs, one per line:
+
+https://www.linkedin.com/posts/example1
+https://www.linkedin.com/posts/example2
+https://www.linkedin.com/posts/example3`;
+      case 'profile_details':
+        return `Paste multiple LinkedIn profile URLs, one per line:
+
+https://www.linkedin.com/in/username1
+https://www.linkedin.com/in/username2
+https://www.linkedin.com/in/username3`;
+      case 'mixed':
+        return `Paste multiple LinkedIn post URLs, one per line:
+
+https://www.linkedin.com/posts/example1
+https://www.linkedin.com/posts/example2
+https://www.linkedin.com/posts/example3`;
       default:
         return '';
     }
@@ -93,17 +146,24 @@ export const ScrapingForm: React.FC<ScrapingFormProps> = ({ onScrape, isLoading,
   const getDescription = () => {
     switch (scrapingType) {
       case 'post_comments':
-        return 'Extract commenters from LinkedIn posts. You can scrape multiple posts at once or paste multiple URLs separated by new lines.';
+        return 'Extract commenters from LinkedIn posts. You can scrape multiple posts at once.';
       case 'profile_details':
-        return 'Extract detailed information from LinkedIn profiles. Add multiple profile URLs or paste multiple URLs separated by new lines.';
+        return 'Extract detailed information from LinkedIn profiles. Add multiple profile URLs to scrape them all.';
       case 'mixed':
-        return 'Extract commenters from posts and their full profile details. Process multiple posts simultaneously or paste multiple URLs separated by new lines.';
+        return 'Extract commenters from posts and their full profile details. Process multiple posts simultaneously.';
       default:
         return '';
     }
   };
 
-  const validUrls = urls.filter(url => url.trim().length > 0);
+  const getValidUrlCount = () => {
+    if (useBulkInput) {
+      return bulkInput.split('\n').filter(url => url.trim().length > 0).length;
+    }
+    return urls.filter(url => url.trim().length > 0).length;
+  };
+
+  const validUrlCount = getValidUrlCount();
 
   return (
     <div className="bg-white rounded-xl shadow-lg p-8 border border-gray-100">
@@ -183,10 +243,10 @@ export const ScrapingForm: React.FC<ScrapingFormProps> = ({ onScrape, isLoading,
         <div>
           <div className="flex items-center justify-between mb-2">
             <label htmlFor="urls" className="block text-sm font-medium text-gray-700">
-              LinkedIn URL{urls.length > 1 ? 's' : ''}
+              LinkedIn URL{validUrlCount > 1 ? 's' : ''}
             </label>
             <div className="flex items-center gap-2">
-              {!showMultipleUrls && (
+              {!useBulkInput && !showMultipleUrls && (
                 <button
                   type="button"
                   onClick={() => {
@@ -201,47 +261,81 @@ export const ScrapingForm: React.FC<ScrapingFormProps> = ({ onScrape, isLoading,
                   + Add multiple URLs
                 </button>
               )}
-              {validUrls.length > 0 && (
+              
+              {!useBulkInput && (
+                <button
+                  type="button"
+                  onClick={switchToBulkInput}
+                  disabled={disabled}
+                  className="text-sm text-green-600 hover:text-green-800 disabled:opacity-50"
+                >
+                  📋 Bulk paste
+                </button>
+              )}
+              
+              {useBulkInput && (
+                <button
+                  type="button"
+                  onClick={switchToIndividualInputs}
+                  disabled={disabled}
+                  className="text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                >
+                  📝 Individual inputs
+                </button>
+              )}
+              
+              {validUrlCount > 0 && (
                 <span className="text-sm text-gray-500">
-                  {validUrls.length} URL{validUrls.length !== 1 ? 's' : ''} ready
+                  {validUrlCount} URL{validUrlCount !== 1 ? 's' : ''} ready
                 </span>
               )}
             </div>
           </div>
 
-          {/* Multi-line paste hint */}
-          <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-            <div className="text-sm text-blue-800">
-              <strong>💡 Pro Tip:</strong> You can paste multiple URLs at once! Just copy multiple LinkedIn URLs and paste them into any input field - each URL should be on a separate line. The form will automatically create individual input fields for each URL.
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            {urls.map((url, index) => (
-              <div key={index} className="flex gap-2">
-                <input
-                  type="url"
-                  value={url}
-                  onChange={(e) => updateUrl(index, e.target.value)}
-                  placeholder={getPlaceholder(index)}
-                  disabled={disabled}
-                  className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-                {urls.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => removeUrlField(index)}
-                    disabled={disabled}
-                    className="px-3 py-3 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                )}
+          {useBulkInput ? (
+            // Bulk input mode - textarea for multiple URLs
+            <div className="space-y-3">
+              <textarea
+                value={bulkInput}
+                onChange={(e) => handleBulkInputChange(e.target.value)}
+                placeholder={getBulkPlaceholder()}
+                disabled={disabled}
+                rows={8}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed resize-none font-mono text-sm"
+              />
+              <div className="text-xs text-gray-500">
+                💡 Paste one URL per line. Empty lines will be ignored.
               </div>
-            ))}
-          </div>
+            </div>
+          ) : (
+            // Individual input mode
+            <div className="space-y-3">
+              {urls.map((url, index) => (
+                <div key={index} className="flex gap-2">
+                  <input
+                    type="url"
+                    value={url}
+                    onChange={(e) => updateUrl(index, e.target.value)}
+                    placeholder={getPlaceholder(index)}
+                    disabled={disabled}
+                    className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                  />
+                  {urls.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeUrlField(index)}
+                      disabled={disabled}
+                      className="px-3 py-3 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
-          {showMultipleUrls && (
+          {!useBulkInput && showMultipleUrls && (
             <button
               type="button"
               onClick={addUrlField}
@@ -256,18 +350,18 @@ export const ScrapingForm: React.FC<ScrapingFormProps> = ({ onScrape, isLoading,
 
         <button
           type="submit"
-          disabled={isLoading || validUrls.length === 0 || disabled}
+          disabled={isLoading || validUrlCount === 0 || disabled}
           className="w-full bg-blue-600 text-white py-3 px-6 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
         >
           {isLoading ? (
             <>
               <Loader2 className="w-5 h-5 animate-spin" />
-              Scraping {validUrls.length} URL{validUrls.length !== 1 ? 's' : ''}...
+              Scraping {validUrlCount} URL{validUrlCount !== 1 ? 's' : ''}...
             </>
           ) : (
             <>
               {getIcon()}
-              Start Scraping {validUrls.length > 1 ? `${validUrls.length} URLs` : ''}
+              Start Scraping {validUrlCount > 1 ? `${validUrlCount} URLs` : ''}
             </>
           )}
         </button>
