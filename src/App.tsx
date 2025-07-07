@@ -182,6 +182,8 @@ function App() {
   };
 
   const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', urls: string[]) => {
+    console.log('🚀 Starting scrape with:', { type, urls: urls.length });
+    
     if (!currentUser) {
       alert('Please select a user first');
       return;
@@ -221,6 +223,7 @@ function App() {
     setScrapingJobs(prev => [job, ...prev]);
     
     try {
+      console.log('🔧 Creating Apify service with key:', selectedKey.keyName);
       const apifyService = createApifyService(selectedKey.apiKey);
       let allResults: any[] = [];
       let totalResultsCount = 0;
@@ -231,6 +234,8 @@ function App() {
         const url = urls[i];
         setCurrentUrlIndex(i);
         
+        console.log(`🔄 Processing URL ${i + 1}/${urls.length}:`, url);
+        
         // Update URL status to processing
         setUrlResults(prev => prev.map((result, index) => 
           index === i ? { ...result, status: 'processing' } : result
@@ -240,10 +245,14 @@ function App() {
           updateLoadingProgress('starting', (i / urls.length) * 100, `Processing URL ${i + 1}/${urls.length}: ${url.substring(0, 50)}...`);
 
           if (type === 'post_comments') {
+            console.log('📝 Scraping post comments for:', url);
             updateLoadingProgress('scraping_comments', (i / urls.length) * 100, `Extracting comments from post ${i + 1}/${urls.length}...`);
             
             const datasetId = await apifyService.scrapePostComments(url);
+            console.log('✅ Got dataset ID:', datasetId);
+            
             const commentsData = await apifyService.getDatasetItems(datasetId);
+            console.log('✅ Got comments data:', commentsData.length, 'items');
             
             allResults.push(...commentsData);
             totalResultsCount += commentsData.length;
@@ -254,6 +263,7 @@ function App() {
             ));
 
           } else if (type === 'profile_details') {
+            console.log('👤 Scraping profile details for:', url);
             updateLoadingProgress('scraping_profiles', (i / urls.length) * 100, `Scraping profile ${i + 1}/${urls.length}...`);
             
             const profilesData = await getProfilesWithOptimization([url], apifyService, (current, total) => {
@@ -264,6 +274,7 @@ function App() {
               updateLoadingProgress('scraping_profiles', urlProgress + profileProgress, `Scraping profile ${i + 1}/${urls.length}: ${current}/${total}`);
             });
             
+            console.log('✅ Got profile data:', profilesData.length, 'items');
             allResults.push(...profilesData);
             totalResultsCount += profilesData.length;
             
@@ -272,6 +283,7 @@ function App() {
             ));
 
           } else if (type === 'mixed') {
+            console.log('🔄 Mixed scraping for:', url);
             updateLoadingProgress('scraping_comments', (i / urls.length) * 50, `Extracting comments from post ${i + 1}/${urls.length}...`);
             
             const datasetId = await apifyService.scrapePostComments(url);
@@ -283,6 +295,8 @@ function App() {
               .map(comment => comment.actor?.linkedinUrl)
               .filter(Boolean)
               .slice(0, 50);
+            
+            console.log('🔗 Extracted profile URLs:', profileUrls.length);
             
             if (profileUrls.length > 0) {
               setTotalProfileCount(profileUrls.length);
@@ -319,11 +333,15 @@ function App() {
 
       updateLoadingProgress('saving_data', 90, 'Saving all scraped data...');
 
+      console.log('💾 Processing results:', { type, totalResults: allResults.length });
+
       // Set results based on scraping type
       if (type === 'post_comments') {
+        console.log('📝 Setting comments data:', allResults.length);
         setCommentersData(allResults);
         setCurrentView('comments');
       } else {
+        console.log('👤 Setting profile details:', allResults.length);
         setProfileDetails(allResults);
         setPreviousView('form');
         setCurrentView('profile-table');
@@ -349,7 +367,7 @@ function App() {
       }
       
       setLoadingError(errorMessage);
-      updateLoadingProgress('error', 0, 'Scraping failed');
+      updateLoadingProgress('error', 0, 'Scraping failed: ' + errorMessage);
       
       const failedJob: LocalJob = {
         ...job,
