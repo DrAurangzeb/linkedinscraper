@@ -421,6 +421,8 @@ function App() {
       updateLoadingProgress('scraping_profiles', 50, `Scraping ${urlsToScrape.length} new profiles (saved ${savedCost} API calls)...`);
       
       const datasetId = await apifyService.scrapeProfiles(urlsToScrape, onProgress);
+      console.log('Dataset ID received from Apify scrapeProfiles:', datasetId);
+
       const newProfilesData = await apifyService.getDatasetItems(datasetId);
       
       updateLoadingProgress('scraping_profiles', 70, 'Saving new profiles to database...');
