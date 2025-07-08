@@ -34,6 +34,7 @@ async scrapeProfiles(profileUrls: string[], onProgress?: (current: number, total
       });
 
       const result: ApifyRunResponse = await response.json();
+      // Added the requested log
       console.log('Apify run initiated. Run ID:', result.data.id, 'Default Dataset ID:', result.data.defaultDatasetId);
       
       await this.waitForRunCompletion(result.data.id);
@@ -53,12 +54,8 @@ async scrapeProfiles(profileUrls: string[], onProgress?: (current: number, total
       onProgress(profileUrls.length, profileUrls.length);
     }
     
-    // Create a combined dataset (this is a simplified approach)
-    // In a real implementation, you might want to create a new dataset and upload the combined results
     console.log(`✅ All batches completed. Total profiles scraped: ${allResults.length}`);
     
-    // For now, we'll return a mock dataset ID and store results in memory
-    // In production, you'd want to properly handle this
     const mockDatasetId = `combined-${Date.now()}`;
     (this as any)._combinedResults = allResults;
     
@@ -76,7 +73,6 @@ async getDatasetItems(datasetId: string): Promise<any[]> {
   try {
     console.log('🔍 Fetching dataset items for:', datasetId);
     
-    // Handle combined results from batch processing
     if (datasetId.startsWith('combined-') && (this as any)._combinedResults) {
       const results = (this as any)._combinedResults;
       console.log('✅ Retrieved', results.length, 'combined dataset items');
@@ -90,7 +86,8 @@ async getDatasetItems(datasetId: string): Promise<any[]> {
     });
 
     const data = await response.json();
-    console.log('Raw data from Apify dataset items:', data);  // New log statement
+    // Added the requested log
+    console.log('Raw data from Apify dataset items:', data);  
     
     console.log('✅ Retrieved', data?.length || 0, 'dataset items');
     return data;
