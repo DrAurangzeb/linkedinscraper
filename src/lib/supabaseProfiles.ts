@@ -160,10 +160,12 @@ export class SupabaseProfilesService {
 
   static async checkProfileExists(linkedinUrl: string, userId?: string): Promise<any | null> {
     try {
+      console.log('🔍 Checking profile existence in Supabase for:', linkedinUrl, 'userId:', userId);
       const cleanUrl = linkedinUrl.trim();
       
       if (userId) {
         // Check if user has access to this profile
+        console.log('👤 Checking user-specific profile access');
         const { data, error } = await supabase
           .from('user_profile_details')
           .select('*')
@@ -176,6 +178,7 @@ export class SupabaseProfilesService {
           return null;
         }
 
+        console.log('👤 User profile check result:', !!data);
         return data ? {
           id: data.profile_id,
           linkedin_url: data.linkedin_url,
@@ -185,6 +188,7 @@ export class SupabaseProfilesService {
         } : null;
       } else {
         // Check if profile exists in the main table
+        console.log('🌐 Checking global profile existence');
         const { data, error } = await supabase
           .from('linkedin_profiles')
           .select('*')
@@ -196,6 +200,7 @@ export class SupabaseProfilesService {
           return null;
         }
 
+        console.log('🌐 Global profile check result:', !!data);
         return data;
       }
     } catch (error) {

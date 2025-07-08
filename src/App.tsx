@@ -400,26 +400,41 @@ function App() {
     
     updateLoadingProgress('scraping_profiles', 30, 'Checking for existing profiles...');
     
+    console.log('🔍 Starting profile optimization check for', profileUrls.length, 'URLs');
+    
     for (const url of profileUrls) {
       try {
         const existingProfile = await SupabaseProfilesService.checkProfileExists(url);
+        console.log('🔍 Checking profile existence for:', url, 'Found:', !!existingProfile);
+        
         if (existingProfile) {
           // Add existing profile to user's collection
           await SupabaseProfilesService.addProfileToUser(url, currentUser!.id);
           results.push(existingProfile.profile_data);
           savedCost++;
+          console.log('✅ Using existing profile for:', url);
         } else {
           urlsToScrape.push(url);
+          console.log('📝 Added to scrape queue:', url);
         }
       } catch (error) {
         console.error('❌ Error checking profile existence for', url, ':', error);
         urlsToScrape.push(url);
+        console.log('📝 Added to scrape queue (due to error):', url);
       }
     }
+    
+    console.log('📊 Optimization results:', {
+      totalUrls: profileUrls.length,
+      existingProfiles: savedCost,
+      urlsToScrape: urlsToScrape.length,
+      urlsToScrapeList: urlsToScrape
+    });
     
     if (urlsToScrape.length > 0) {
       updateLoadingProgress('scraping_profiles', 50, `Scraping ${urlsToScrape.length} new profiles (saved ${savedCost} API calls)...`);
       
+      console.log('🚀 Starting Apify scraping for', urlsToScrape.length, 'URLs:', urlsToScrape);
       const datasetId = await apifyService.scrapeProfiles(urlsToScrape, onProgress);
       console.log('Dataset ID received from Apify scrapeProfiles:', datasetId);
 
@@ -440,18 +455,27 @@ function App() {
             });
             
             results.push(profileData);
+            console.log('✅ Saved new profile:', profileData.linkedinUrl);
           } catch (saveError) {
             console.error('❌ Error saving profile:', profileData.linkedinUrl, saveError);
             results.push(profileData);
           }
         }
       }
+    } else {
+      console.log('ℹ️ No new profiles to scrape - all profiles already exist in database');
     }
     
     updateLoadingProgress('scraping_profiles', 90, `Completed! Saved ${savedCost} API calls by using cached profiles.`);
     
     const updatedProfiles = LocalStorageService.getUserProfiles(currentUser!.id);
     setProfiles(updatedProfiles);
+    
+    console.log('📊 Final results:', {
+      totalResults: results.length,
+      savedCost,
+      newlyScraped: urlsToScrape.length
+    });
     
     return results;
   };
