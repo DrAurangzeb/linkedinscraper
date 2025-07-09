@@ -195,13 +195,16 @@ function App() {
     }
 
     const keys = LocalStorageService.getApifyKeys(currentUser.id);
-    const selectedKey = keys.find(k => k.id === selectedKeyId);
+    const allUserKeys = keys.filter(k => k.isActive);
 
-    if (!selectedKey) {
-      alert('Invalid API key selected');
+    if (allUserKeys.length === 0) {
+      alert('No active API keys found');
       return;
     }
 
+    // Create array of API keys for rotation
+    const apiKeys = allUserKeys.map(k => k.apiKey);
+    console.log(`🔑 Using ${apiKeys.length} API key(s) for rotation`);
     setIsScraping(true);
     setScrapingType(type);
     setLoadingError('');
@@ -223,8 +226,8 @@ function App() {
     setScrapingJobs(prev => [job, ...prev]);
     
     try {
-      console.log('🔧 Creating Apify service with key:', selectedKey.keyName);
-      const apifyService = createApifyService(selectedKey.apiKey);
+      console.log('🔧 Creating Apify service with', apiKeys.length, 'API key(s)');
+      const apifyService = createApifyService(apiKeys);
       let allResults: any[] = [];
       let totalResultsCount = 0;
 
@@ -358,6 +361,8 @@ function App() {
       LocalStorageService.saveJob(completedJob);
       setScrapingJobs(prev => prev.map(j => j.id === job.id ? completedJob : j));
 
+      // Log final API usage stats
+      console.log('📊 Final API usage statistics:', apifyService.getUsageStats());
     } catch (error) {
       console.error('❌ Scraping error:', error);
       
@@ -487,12 +492,14 @@ function App() {
     }
 
     const keys = LocalStorageService.getApifyKeys(currentUser.id);
-    const selectedKey = keys.find(k => k.id === selectedKeyId);
+    const allUserKeys = keys.filter(k => k.isActive);
 
-    if (!selectedKey) {
-      alert('Invalid API key selected');
+    if (allUserKeys.length === 0) {
+      alert('No active API keys found');
       return;
     }
+    
+    const apiKeys = allUserKeys.map(k => k.apiKey);
     
     setIsScraping(true);
     setScrapingType('profile_details');
@@ -506,7 +513,7 @@ function App() {
     setScrapingJobs(prev => [job, ...prev]);
     
     try {
-      const apifyService = createApifyService(selectedKey.apiKey);
+      const apifyService = createApifyService(apiKeys);
       const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, (current, total) => {
         setCurrentProfileCount(current);
         const progressPercent = total > 0 ? (current / total) * 100 : 0;
@@ -591,15 +598,17 @@ function App() {
     }
 
     const keys = LocalStorageService.getApifyKeys(currentUser.id);
-    const selectedKey = keys.find(k => k.id === selectedKeyId);
+    const allUserKeys = keys.filter(k => k.isActive);
 
-    if (!selectedKey) {
-      alert('Invalid API key selected');
+    if (allUserKeys.length === 0) {
+      alert('No active API keys found');
       return;
     }
 
+    const apiKeys = allUserKeys.map(k => k.apiKey);
+
     try {
-      const apifyService = createApifyService(selectedKey.apiKey);
+      const apifyService = createApifyService(apiKeys);
       const profilesData = await getProfilesWithOptimization([profileUrl], apifyService);
       
       if (profilesData.length > 0) {
@@ -619,15 +628,17 @@ function App() {
     }
 
     const keys = LocalStorageService.getApifyKeys(currentUser.id);
-    const selectedKey = keys.find(k => k.id === selectedKeyId);
+    const allUserKeys = keys.filter(k => k.isActive);
 
-    if (!selectedKey) {
-      alert('Invalid API key selected');
+    if (allUserKeys.length === 0) {
+      alert('No active API keys found');
       return;
     }
 
+    const apiKeys = allUserKeys.map(k => k.apiKey);
+
     try {
-      const apifyService = createApifyService(selectedKey.apiKey);
+      const apifyService = createApifyService(apiKeys);
       await getProfilesWithOptimization(profileUrls, apifyService);
       
       await loadUserData(currentUser.id);

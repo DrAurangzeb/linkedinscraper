@@ -20,6 +20,7 @@ export const LocalApifyKeyManager: React.FC<LocalApifyKeyManagerProps> = ({
   const [formData, setFormData] = useState({ key_name: '', api_key: '' });
   const [error, setError] = useState<string>('');
   const [success, setSuccess] = useState<string>('');
+  const [showUsageStats, setShowUsageStats] = useState(false);
 
   useEffect(() => {
     loadKeys();
@@ -306,10 +307,30 @@ export const LocalApifyKeyManager: React.FC<LocalApifyKeyManagerProps> = ({
         ))}
       </div>
 
+      {keys.length > 1 && (
+        <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-center gap-2 text-sm text-blue-800 mb-2">
+            <Key className="w-4 h-4" />
+            <span className="font-medium">Multi-Key Setup Active</span>
+          </div>
+          <div className="text-xs text-blue-700">
+            🔄 Automatic key rotation enabled - when one key reaches its quota limit, 
+            the system will automatically switch to the next available key.
+          </div>
+          <div className="text-xs text-blue-600 mt-1">
+            💡 Recommended: Add 3-5 keys for unlimited scraping capacity
+          </div>
+        </div>
+      )}
       {keys.length === 0 && !showCreateForm && (
         <div className="text-center py-8 text-gray-500">
           <Key className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-          <p>No API keys found. Add your first Apify API key to get started.</p>
+          <div>
+            <p className="mb-2">No API keys found. Add your Apify API keys to get started.</p>
+            <p className="text-xs text-gray-400">
+              💡 Tip: Add multiple keys for automatic rotation when quotas are reached
+            </p>
+          </div>
         </div>
       )}
     </div>
