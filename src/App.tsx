@@ -269,7 +269,7 @@ function App() {
             console.log('👤 Scraping profile details for:', url);
             updateLoadingProgress('scraping_profiles', (i / urls.length) * 100, `Scraping profile ${i + 1}/${urls.length}...`);
             
-            const profilesData = await getProfilesWithOptimization([url], apifyService, (current, total) => {
+            const profilesData = await scrapeProfilesDirectly([url], apifyService, (current, total) => {
               setCurrentProfileCount(current);
               setTotalProfileCount(total);
               const urlProgress = (i / urls.length) * 100;
@@ -305,7 +305,7 @@ function App() {
               setTotalProfileCount(profileUrls.length);
               updateLoadingProgress('scraping_profiles', (i / urls.length) * 50 + 50, `Scraping ${profileUrls.length} profiles from post ${i + 1}/${urls.length}...`);
               
-              const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, (current, total) => {
+              const profilesData = await scrapeProfilesDirectly(profileUrls, apifyService, (current, total) => {
                 setCurrentProfileCount(current);
                 const urlProgress = (i / urls.length) * 50 + 50;
                 const profileProgress = total > 0 ? (current / total) * (50 / urls.length) : 0;
@@ -391,6 +391,62 @@ function App() {
       setTotalProfileCount(0);
       setCurrentUrlIndex(0);
       setTotalUrls(0);
+    }
+  };
+
+  // New function that always calls Apify API directly without checking database first
+  const scrapeProfilesDirectly = async (
+    profileUrls: string[], 
+    apifyService: any, 
+    onProgress?: (current: number, total: number) => void
+  ): Promise<any[]> => {
+    console.log('🚀 DIRECT APIFY SCRAPING - Bypassing database check');
+    console.log('📋 URLs to scrape directly from Apify:', profileUrls);
+    
+    updateLoadingProgress('scraping_profiles', 10, 'Starting direct Apify scraping...');
+    
+    try {
+      // Always call Apify API directly
+      console.log('🔥 Calling Apify API for', profileUrls.length, 'profiles');
+      const datasetId = await apifyService.scrapeProfiles(profileUrls, onProgress);
+      console.log('✅ Apify scraping completed, dataset ID:', datasetId);
+
+      updateLoadingProgress('scraping_profiles', 70, 'Retrieving scraped data...');
+      const newProfilesData = await apifyService.getDatasetItems(datasetId);
+      console.log('📊 Retrieved', newProfilesData.length, 'profiles from Apify');
+
+      updateLoadingProgress('scraping_profiles', 85, 'Saving scraped profiles...');
+      
+      // Save to database and local storage
+      for (const profileData of newProfilesData) {
+        if (profileData.linkedinUrl) {
+          try {
+            // Save to Supabase
+            await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
+            
+            // Save to local storage
+            LocalStorageService.addUserProfile(currentUser!.id, {
+              linkedin_url: profileData.linkedinUrl,
+              profile_data: profileData,
+              last_updated: new Date().toISOString()
+            });
+            
+            console.log('✅ Saved profile:', profileData.linkedinUrl);
+          } catch (saveError) {
+            console.error('❌ Error saving profile:', profileData.linkedinUrl, saveError);
+          }
+        }
+      }
+      
+      // Update local profiles state
+      const updatedProfiles = LocalStorageService.getUserProfiles(currentUser!.id);
+      setProfiles(updatedProfiles);
+      
+      console.log('🎉 Direct scraping completed successfully with', newProfilesData.length, 'profiles');
+      return newProfilesData;
+    } catch (error) {
+      console.error('❌ Direct scraping failed:', error);
+      throw error;
     }
   };
 
@@ -514,7 +570,7 @@ function App() {
     
     try {
       const apifyService = createApifyService(apiKeys);
-      const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, (current, total) => {
+      const profilesData = await scrapeProfilesDirectly(profileUrls, apifyService, (current, total) => {
         setCurrentProfileCount(current);
         const progressPercent = total > 0 ? (current / total) * 100 : 0;
         updateLoadingProgress('scraping_profiles', 25 + (progressPercent * 0.5), `Scraping profiles: ${current}/${total}`);
@@ -609,7 +665,7 @@ function App() {
 
     try {
       const apifyService = createApifyService(apiKeys);
-      const profilesData = await getProfilesWithOptimization([profileUrl], apifyService);
+      const profilesData = await scrapeProfilesDirectly([profileUrl], apifyService);
       
       if (profilesData.length > 0) {
         await loadUserData(currentUser.id);
@@ -639,7 +695,7 @@ function App() {
 
     try {
       const apifyService = createApifyService(apiKeys);
-      await getProfilesWithOptimization(profileUrls, apifyService);
+      await scrapeProfilesDirectly(profileUrls, apifyService);
       
       await loadUserData(currentUser.id);
       alert(`Successfully updated ${profileUrls.length} profiles!`);
