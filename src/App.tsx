@@ -182,29 +182,35 @@ function App() {
   };
 
   const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', urls: string[]) => {
+    console.log('🚀 handleScrape called with:', { type, urlCount: urls.length, urls });
     console.log('🚀 Starting scrape with:', { type, urls: urls.length });
     
     if (!currentUser) {
+      console.error('❌ No current user found');
       alert('Please select a user first');
       return;
     }
 
     if (!selectedKeyId) {
+      console.error('❌ No API key selected');
       alert('Please select an Apify API key first');
       return;
     }
 
     const keys = LocalStorageService.getApifyKeys(currentUser.id);
+    console.log('🔑 Retrieved keys from localStorage:', keys.length);
     const allUserKeys = keys.filter(k => k.isActive);
+    console.log('🔑 Active keys found:', allUserKeys.length);
 
     if (allUserKeys.length === 0) {
+      console.error('❌ No active API keys found');
       alert('No active API keys found');
       return;
     }
 
     // Create array of API keys for rotation
     const apiKeys = allUserKeys.map(k => k.apiKey);
-    console.log(`🔑 Using ${apiKeys.length} API key(s) for rotation`);
+    console.log(`🔑 Using ${apiKeys.length} API key(s) for rotation:`, apiKeys.map(k => k.substring(0, 10) + '...'));
     setIsScraping(true);
     setScrapingType(type);
     setLoadingError('');
@@ -228,6 +234,7 @@ function App() {
     try {
       console.log('🔧 Creating Apify service with', apiKeys.length, 'API key(s)');
       const apifyService = createApifyService(apiKeys);
+      console.log('✅ Apify service created successfully');
       let allResults: any[] = [];
       let totalResultsCount = 0;
 
@@ -238,6 +245,7 @@ function App() {
         setCurrentUrlIndex(i);
         
         console.log(`🔄 Processing URL ${i + 1}/${urls.length}:`, url);
+        console.log(`📊 Current scraping state - isScraping: ${isScraping}, type: ${type}`);
         
         // Update URL status to processing
         setUrlResults(prev => prev.map((result, index) => 
@@ -267,6 +275,7 @@ function App() {
 
           } else if (type === 'profile_details') {
             console.log('👤 Scraping profile details for:', url);
+            console.log('🔧 About to call scrapeProfilesDirectly with URL:', url);
             updateLoadingProgress('scraping_profiles', (i / urls.length) * 100, `Scraping profile ${i + 1}/${urls.length}...`);
             
             const profilesData = await scrapeProfilesDirectly([url], apifyService, (current, total) => {
@@ -277,7 +286,8 @@ function App() {
               updateLoadingProgress('scraping_profiles', urlProgress + profileProgress, `Scraping profile ${i + 1}/${urls.length}: ${current}/${total}`);
             });
             
-            console.log('✅ Got profile data:', profilesData.length, 'items');
+            console.log('✅ scrapeProfilesDirectly returned:', profilesData.length, 'items');
+            console.log('📋 Profile data sample:', profilesData.slice(0, 2));
             allResults.push(...profilesData);
             totalResultsCount += profilesData.length;
             
@@ -400,20 +410,28 @@ function App() {
     apifyService: any, 
     onProgress?: (current: number, total: number) => void
   ): Promise<any[]> => {
+    console.log('🚀 scrapeProfilesDirectly called');
+    console.log('📋 Input parameters:', { 
+      profileUrlsCount: profileUrls.length, 
+      profileUrls, 
+      hasApifyService: !!apifyService,
+      hasOnProgress: !!onProgress 
+    });
     console.log('🚀 DIRECT APIFY SCRAPING - Bypassing database check');
-    console.log('📋 URLs to scrape directly from Apify:', profileUrls);
     
     updateLoadingProgress('scraping_profiles', 10, 'Starting direct Apify scraping...');
     
     try {
       // Always call Apify API directly
-      console.log('🔥 Calling Apify API for', profileUrls.length, 'profiles');
+      console.log('🔥 About to call apifyService.scrapeProfiles with:', profileUrls.length, 'profiles');
+      console.log('🔥 ApifyService methods available:', Object.getOwnPropertyNames(Object.getPrototypeOf(apifyService)));
       const datasetId = await apifyService.scrapeProfiles(profileUrls, onProgress);
-      console.log('✅ Apify scraping completed, dataset ID:', datasetId);
+      console.log('✅ apifyService.scrapeProfiles returned dataset ID:', datasetId);
 
       updateLoadingProgress('scraping_profiles', 70, 'Retrieving scraped data...');
       const newProfilesData = await apifyService.getDatasetItems(datasetId);
-      console.log('📊 Retrieved', newProfilesData.length, 'profiles from Apify');
+      console.log('📊 apifyService.getDatasetItems returned:', newProfilesData.length, 'profiles');
+      console.log('📋 Sample profile data:', newProfilesData.slice(0, 1));
 
       updateLoadingProgress('scraping_profiles', 85, 'Saving scraped profiles...');
       
@@ -431,9 +449,9 @@ function App() {
               last_updated: new Date().toISOString()
             });
             
-            console.log('✅ Saved profile:', profileData.linkedinUrl);
+            console.log('✅ Saved profile to DB and localStorage:', profileData.linkedinUrl);
           } catch (saveError) {
-            console.error('❌ Error saving profile:', profileData.linkedinUrl, saveError);
+            console.error('❌ Error saving profile:', profileData.linkedinUrl, 'Error:', saveError);
           }
         }
       }
@@ -442,10 +460,14 @@ function App() {
       const updatedProfiles = LocalStorageService.getUserProfiles(currentUser!.id);
       setProfiles(updatedProfiles);
       
-      console.log('🎉 Direct scraping completed successfully with', newProfilesData.length, 'profiles');
+      console.log('🎉 scrapeProfilesDirectly completed successfully with', newProfilesData.length, 'profiles');
       return newProfilesData;
     } catch (error) {
-      console.error('❌ Direct scraping failed:', error);
+      console.error('❌ scrapeProfilesDirectly failed with error:', error);
+      console.error('❌ Error details:', {
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : 'No stack trace'
+      });
       throw error;
     }
   };
