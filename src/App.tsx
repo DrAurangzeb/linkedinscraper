@@ -89,46 +89,11 @@ function App() {
     const jobs = LocalStorageService.getJobs(userId);
     setScrapingJobs(jobs);
     
-    try {
-      console.log('📊 Loading data for user:', userId);
-      
-      const localProfiles = LocalStorageService.getUserProfiles(userId);
-      console.log('📱 Local profiles for user:', localProfiles.length);
-      
-      const supabaseProfiles = await SupabaseProfilesService.getUserProfiles(userId);
-      console.log('☁️ Supabase profiles for user:', supabaseProfiles.length);
-      
-      const mergedProfiles = mergeProfiles(localProfiles, supabaseProfiles);
-      
-      LocalStorageService.saveUserProfiles(userId, mergedProfiles);
-      setProfiles(mergedProfiles);
-      
-      console.log(`✅ Loaded ${localProfiles.length} local + ${supabaseProfiles.length} Supabase = ${mergedProfiles.length} merged profiles for user ${userId}`);
-    } catch (error) {
-      console.error('❌ Error loading user data:', error);
-      const localProfiles = LocalStorageService.getUserProfiles(userId);
-      setProfiles(localProfiles);
-      console.log('⚠️ Fallback: Using local profiles only:', localProfiles.length);
-    }
-  };
-
-  const mergeProfiles = (localProfiles: any[], supabaseProfiles: any[]): any[] => {
-    const profileMap = new Map();
-    
-    localProfiles.forEach(profile => {
-      profileMap.set(profile.linkedin_url, profile);
-    });
-    
-    supabaseProfiles.forEach(supabaseProfile => {
-      const url = supabaseProfile.linkedin_url;
-      const existing = profileMap.get(url);
-      
-      if (!existing || new Date(supabaseProfile.last_updated) > new Date(existing.last_updated)) {
-        profileMap.set(url, supabaseProfile);
-      }
-    });
-    
-    return Array.from(profileMap.values());
+    // Only load from local storage for now - database fetching will be added later
+    console.log('📊 Loading data for user:', userId);
+    const localProfiles = LocalStorageService.getUserProfiles(userId);
+    setProfiles(localProfiles);
+    console.log('📱 Loaded', localProfiles.length, 'profiles from local storage for user:', userId);
   };
 
   const updateLoadingProgress = (stage: typeof loadingStage, progress: number = 0, message: string = '') => {
@@ -255,13 +220,19 @@ function App() {
         try {
           updateLoadingProgress('starting', (i / urls.length) * 100, `Processing URL ${i + 1}/${urls.length}: ${url.substring(0, 50)}...`);
 
+          console.log(`🚀 About to start scraping for URL ${i + 1}/${urls.length}:`, url);
+          console.log(`🔧 Scraping type: ${type}`);
+          console.log(`🔧 ApifyService available methods:`, Object.getOwnPropertyNames(Object.getPrototypeOf(apifyService)));
+
           if (type === 'post_comments') {
             console.log('📝 Scraping post comments for:', url);
             updateLoadingProgress('scraping_comments', (i / urls.length) * 100, `Extracting comments from post ${i + 1}/${urls.length}...`);
             
+            console.log('🌐 About to call apifyService.scrapePostComments...');
             const datasetId = await apifyService.scrapePostComments(url);
             console.log('✅ Got dataset ID:', datasetId);
             
+            console.log('📥 About to call apifyService.getDatasetItems...');
             const commentsData = await apifyService.getDatasetItems(datasetId);
             console.log('✅ Got comments data:', commentsData.length, 'items');
             
@@ -275,19 +246,45 @@ function App() {
 
           } else if (type === 'profile_details') {
             console.log('👤 Scraping profile details for:', url);
-            console.log('🔧 About to call scrapeProfilesDirectly with URL:', url);
             updateLoadingProgress('scraping_profiles', (i / urls.length) * 100, `Scraping profile ${i + 1}/${urls.length}...`);
             
-            const profilesData = await scrapeProfilesDirectly([url], apifyService, (current, total) => {
+            console.log('🌐 About to call apifyService.scrapeProfiles directly...');
+            const datasetId = await apifyService.scrapeProfiles([url], (current, total) => {
               setCurrentProfileCount(current);
               setTotalProfileCount(total);
               const urlProgress = (i / urls.length) * 100;
               const profileProgress = total > 0 ? (current / total) * (100 / urls.length) : 0;
               updateLoadingProgress('scraping_profiles', urlProgress + profileProgress, `Scraping profile ${i + 1}/${urls.length}: ${current}/${total}`);
             });
+            console.log('✅ Got dataset ID from profile scraping:', datasetId);
             
-            console.log('✅ scrapeProfilesDirectly returned:', profilesData.length, 'items');
-            console.log('📋 Profile data sample:', profilesData.slice(0, 2));
+            console.log('📥 About to call apifyService.getDatasetItems for profiles...');
+            const profilesData = await apifyService.getDatasetItems(datasetId);
+            console.log('✅ Got profiles data:', profilesData.length, 'items');
+            console.log('📋 Profile data sample:', profilesData.slice(0, 1));
+            
+            // Save profiles to database and local storage
+            console.log('💾 Saving profiles to database and local storage...');
+            for (const profileData of profilesData) {
+              if (profileData.linkedinUrl) {
+                try {
+                  // Save to Supabase
+                  await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
+                  
+                  // Save to local storage
+                  LocalStorageService.addUserProfile(currentUser!.id, {
+                    linkedin_url: profileData.linkedinUrl,
+                    profile_data: profileData,
+                    last_updated: new Date().toISOString()
+                  });
+                  
+                  console.log('✅ Saved profile to DB and localStorage:', profileData.linkedinUrl);
+                } catch (saveError) {
+                  console.error('❌ Error saving profile:', profileData.linkedinUrl, 'Error:', saveError);
+                }
+              }
+            }
+            
             allResults.push(...profilesData);
             totalResultsCount += profilesData.length;
             
@@ -299,8 +296,13 @@ function App() {
             console.log('🔄 Mixed scraping for:', url);
             updateLoadingProgress('scraping_comments', (i / urls.length) * 50, `Extracting comments from post ${i + 1}/${urls.length}...`);
             
+            console.log('🌐 About to call apifyService.scrapePostComments for mixed mode...');
             const datasetId = await apifyService.scrapePostComments(url);
+            console.log('✅ Got comments dataset ID:', datasetId);
+            
+            console.log('📥 About to call apifyService.getDatasetItems for comments...');
             const commentsData = await apifyService.getDatasetItems(datasetId);
+            console.log('✅ Got comments data:', commentsData.length, 'items');
             
             updateLoadingProgress('extracting_profiles', (i / urls.length) * 50 + 25, `Extracting profile URLs from post ${i + 1}/${urls.length}...`);
             
@@ -315,12 +317,40 @@ function App() {
               setTotalProfileCount(profileUrls.length);
               updateLoadingProgress('scraping_profiles', (i / urls.length) * 50 + 50, `Scraping ${profileUrls.length} profiles from post ${i + 1}/${urls.length}...`);
               
-              const profilesData = await scrapeProfilesDirectly(profileUrls, apifyService, (current, total) => {
+              console.log('🌐 About to call apifyService.scrapeProfiles for mixed mode profiles...');
+              const profileDatasetId = await apifyService.scrapeProfiles(profileUrls, (current, total) => {
                 setCurrentProfileCount(current);
                 const urlProgress = (i / urls.length) * 50 + 50;
                 const profileProgress = total > 0 ? (current / total) * (50 / urls.length) : 0;
                 updateLoadingProgress('scraping_profiles', urlProgress + profileProgress, `Post ${i + 1}/${urls.length}: Scraping profiles ${current}/${total}`);
               });
+              console.log('✅ Got profiles dataset ID:', profileDatasetId);
+              
+              console.log('📥 About to call apifyService.getDatasetItems for mixed mode profiles...');
+              const profilesData = await apifyService.getDatasetItems(profileDatasetId);
+              console.log('✅ Got mixed mode profiles data:', profilesData.length, 'items');
+              
+              // Save profiles to database and local storage
+              console.log('💾 Saving mixed mode profiles to database and local storage...');
+              for (const profileData of profilesData) {
+                if (profileData.linkedinUrl) {
+                  try {
+                    // Save to Supabase
+                    await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
+                    
+                    // Save to local storage
+                    LocalStorageService.addUserProfile(currentUser!.id, {
+                      linkedin_url: profileData.linkedinUrl,
+                      profile_data: profileData,
+                      last_updated: new Date().toISOString()
+                    });
+                    
+                    console.log('✅ Saved mixed mode profile to DB and localStorage:', profileData.linkedinUrl);
+                  } catch (saveError) {
+                    console.error('❌ Error saving mixed mode profile:', profileData.linkedinUrl, 'Error:', saveError);
+                  }
+                }
+              }
               
               allResults.push(...profilesData);
               totalResultsCount += profilesData.length;
@@ -359,6 +389,12 @@ function App() {
         setPreviousView('form');
         setCurrentView('profile-table');
       }
+      
+      // Update local profiles state
+      console.log('🔄 Updating local profiles state...');
+      const updatedProfiles = LocalStorageService.getUserProfiles(currentUser!.id);
+      setProfiles(updatedProfiles);
+      console.log('✅ Updated profiles state with', updatedProfiles.length, 'profiles');
 
       updateLoadingProgress('completed', 100, `Successfully processed ${urls.length} URL${urls.length > 1 ? 's' : ''} with ${totalResultsCount} total results!`);
       
@@ -404,180 +440,27 @@ function App() {
     }
   };
 
-  // New function that always calls Apify API directly without checking database first
-  const scrapeProfilesDirectly = async (
-    profileUrls: string[], 
-    apifyService: any, 
-    onProgress?: (current: number, total: number) => void
-  ): Promise<any[]> => {
-    console.log('🚀 scrapeProfilesDirectly called');
-    console.log('📋 Input parameters:', { 
-      profileUrlsCount: profileUrls.length, 
-      profileUrls, 
-      hasApifyService: !!apifyService,
-      hasOnProgress: !!onProgress 
-    });
-    console.log('🚀 DIRECT APIFY SCRAPING - Bypassing database check');
-    
-    updateLoadingProgress('scraping_profiles', 10, 'Starting direct Apify scraping...');
-    
-    try {
-      // Always call Apify API directly
-      console.log('🔥 About to call apifyService.scrapeProfiles with:', profileUrls.length, 'profiles');
-      console.log('🔥 ApifyService methods available:', Object.getOwnPropertyNames(Object.getPrototypeOf(apifyService)));
-      const datasetId = await apifyService.scrapeProfiles(profileUrls, onProgress);
-      console.log('✅ apifyService.scrapeProfiles returned dataset ID:', datasetId);
-
-      updateLoadingProgress('scraping_profiles', 70, 'Retrieving scraped data...');
-      const newProfilesData = await apifyService.getDatasetItems(datasetId);
-      console.log('📊 apifyService.getDatasetItems returned:', newProfilesData.length, 'profiles');
-      console.log('📋 Sample profile data:', newProfilesData.slice(0, 1));
-
-      updateLoadingProgress('scraping_profiles', 85, 'Saving scraped profiles...');
-      
-      // Save to database and local storage
-      for (const profileData of newProfilesData) {
-        if (profileData.linkedinUrl) {
-          try {
-            // Save to Supabase
-            await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
-            
-            // Save to local storage
-            LocalStorageService.addUserProfile(currentUser!.id, {
-              linkedin_url: profileData.linkedinUrl,
-              profile_data: profileData,
-              last_updated: new Date().toISOString()
-            });
-            
-            console.log('✅ Saved profile to DB and localStorage:', profileData.linkedinUrl);
-          } catch (saveError) {
-            console.error('❌ Error saving profile:', profileData.linkedinUrl, 'Error:', saveError);
-          }
-        }
-      }
-      
-      // Update local profiles state
-      const updatedProfiles = LocalStorageService.getUserProfiles(currentUser!.id);
-      setProfiles(updatedProfiles);
-      
-      console.log('🎉 scrapeProfilesDirectly completed successfully with', newProfilesData.length, 'profiles');
-      return newProfilesData;
-    } catch (error) {
-      console.error('❌ scrapeProfilesDirectly failed with error:', error);
-      console.error('❌ Error details:', {
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : 'No stack trace'
-      });
-      throw error;
-    }
-  };
-
-  const getProfilesWithOptimization = async (
-    profileUrls: string[], 
-    apifyService: any, 
-    onProgress?: (current: number, total: number) => void
-  ): Promise<any[]> => {
-    const results: any[] = [];
-    const urlsToScrape: string[] = [];
-    let savedCost = 0;
-    
-    updateLoadingProgress('scraping_profiles', 30, 'Checking for existing profiles...');
-    
-    console.log('🔍 Starting profile optimization check for', profileUrls.length, 'URLs');
-    
-    for (const url of profileUrls) {
-      try {
-        const existingProfile = await SupabaseProfilesService.checkProfileExists(url);
-        console.log('🔍 Checking profile existence for:', url, 'Found:', !!existingProfile);
-        
-        if (existingProfile) {
-          // Add existing profile to user's collection
-          await SupabaseProfilesService.addProfileToUser(url, currentUser!.id);
-          results.push(existingProfile.profile_data);
-          savedCost++;
-          console.log('✅ Using existing profile for:', url);
-        } else {
-          urlsToScrape.push(url);
-          console.log('📝 Added to scrape queue:', url);
-        }
-      } catch (error) {
-        console.error('❌ Error checking profile existence for', url, ':', error);
-        urlsToScrape.push(url);
-        console.log('📝 Added to scrape queue (due to error):', url);
-      }
-    }
-    
-    console.log('📊 Optimization results:', {
-      totalUrls: profileUrls.length,
-      existingProfiles: savedCost,
-      urlsToScrape: urlsToScrape.length,
-      urlsToScrapeList: urlsToScrape
-    });
-    
-    if (urlsToScrape.length > 0) {
-      updateLoadingProgress('scraping_profiles', 50, `Scraping ${urlsToScrape.length} new profiles (saved ${savedCost} API calls)...`);
-      
-      console.log('🚀 Starting Apify scraping for', urlsToScrape.length, 'URLs:', urlsToScrape);
-      const datasetId = await apifyService.scrapeProfiles(urlsToScrape, onProgress);
-      console.log('Dataset ID received from Apify scrapeProfiles:', datasetId);
-
-      const newProfilesData = await apifyService.getDatasetItems(datasetId);
-      console.log('New profiles data received from Apify dataset:', newProfilesData);
-
-      updateLoadingProgress('scraping_profiles', 70, 'Saving new profiles to database...');
-      
-      for (const profileData of newProfilesData) {
-        if (profileData.linkedinUrl) {
-          try {
-            await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
-            
-            LocalStorageService.addUserProfile(currentUser!.id, {
-              linkedin_url: profileData.linkedinUrl,
-              profile_data: profileData,
-              last_updated: new Date().toISOString()
-            });
-            
-            results.push(profileData);
-            console.log('✅ Saved new profile:', profileData.linkedinUrl);
-          } catch (saveError) {
-            console.error('❌ Error saving profile:', profileData.linkedinUrl, saveError);
-            results.push(profileData);
-          }
-        }
-      }
-    } else {
-      console.log('ℹ️ No new profiles to scrape - all profiles already exist in database');
-    }
-    
-    updateLoadingProgress('scraping_profiles', 90, `Completed! Saved ${savedCost} API calls by using cached profiles.`);
-    
-    const updatedProfiles = LocalStorageService.getUserProfiles(currentUser!.id);
-    setProfiles(updatedProfiles);
-    
-    console.log('📊 Final results:', {
-      totalResults: results.length,
-      savedCost,
-      newlyScraped: urlsToScrape.length
-    });
-    
-    return results;
-  };
-
   const handleScrapeSelectedCommenterProfiles = async (profileUrls: string[]) => {
+    console.log('🚀 handleScrapeSelectedCommenterProfiles called with:', profileUrls.length, 'URLs');
+    
     if (!currentUser || !selectedKeyId) {
+      console.error('❌ Missing user or API key');
       alert('Please ensure you are signed in and have selected an API key');
       return;
     }
 
     const keys = LocalStorageService.getApifyKeys(currentUser.id);
     const allUserKeys = keys.filter(k => k.isActive);
+    console.log('🔑 Found', allUserKeys.length, 'active keys for selected commenters scraping');
 
     if (allUserKeys.length === 0) {
+      console.error('❌ No active API keys found');
       alert('No active API keys found');
       return;
     }
     
     const apiKeys = allUserKeys.map(k => k.apiKey);
+    console.log('🔑 Using API keys:', apiKeys.map(k => k.substring(0, 10) + '...'));
     
     setIsScraping(true);
     setScrapingType('profile_details');
@@ -591,17 +474,53 @@ function App() {
     setScrapingJobs(prev => [job, ...prev]);
     
     try {
+      console.log('🔧 Creating Apify service for selected commenters...');
       const apifyService = createApifyService(apiKeys);
-      const profilesData = await scrapeProfilesDirectly(profileUrls, apifyService, (current, total) => {
+      console.log('✅ Apify service created for selected commenters');
+      
+      console.log('🌐 About to call apifyService.scrapeProfiles for selected commenters...');
+      const datasetId = await apifyService.scrapeProfiles(profileUrls, (current, total) => {
         setCurrentProfileCount(current);
         const progressPercent = total > 0 ? (current / total) * 100 : 0;
         updateLoadingProgress('scraping_profiles', 25 + (progressPercent * 0.5), `Scraping profiles: ${current}/${total}`);
       });
+      console.log('✅ Got dataset ID for selected commenters:', datasetId);
+      
+      console.log('📥 About to call apifyService.getDatasetItems for selected commenters...');
+      const profilesData = await apifyService.getDatasetItems(datasetId);
+      console.log('✅ Got selected commenters profiles data:', profilesData.length, 'items');
+      
+      // Save profiles to database and local storage
+      console.log('💾 Saving selected commenters profiles to database and local storage...');
+      for (const profileData of profilesData) {
+        if (profileData.linkedinUrl) {
+          try {
+            // Save to Supabase
+            await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
+            
+            // Save to local storage
+            LocalStorageService.addUserProfile(currentUser!.id, {
+              linkedin_url: profileData.linkedinUrl,
+              profile_data: profileData,
+              last_updated: new Date().toISOString()
+            });
+            
+            console.log('✅ Saved selected commenter profile to DB and localStorage:', profileData.linkedinUrl);
+          } catch (saveError) {
+            console.error('❌ Error saving selected commenter profile:', profileData.linkedinUrl, 'Error:', saveError);
+          }
+        }
+      }
       
       updateLoadingProgress('saving_data', 75, 'Processing profile data...');
       setProfileDetails(profilesData);
       setPreviousView('comments');
       setCurrentView('profile-table');
+      
+      // Update local profiles state
+      const updatedProfiles = LocalStorageService.getUserProfiles(currentUser!.id);
+      setProfiles(updatedProfiles);
+      
       updateLoadingProgress('completed', 100, 'Selected profiles scraped successfully!');
       
       const completedJob: LocalJob = {
@@ -670,29 +589,67 @@ function App() {
   };
 
   const handleUpdateProfile = async (profileUrl: string) => {
+    console.log('🔄 handleUpdateProfile called for:', profileUrl);
+    
     if (!currentUser || !selectedKeyId) {
+      console.error('❌ Missing user or API key for profile update');
       alert('Please ensure you are signed in and have selected an API key');
       return;
     }
 
     const keys = LocalStorageService.getApifyKeys(currentUser.id);
     const allUserKeys = keys.filter(k => k.isActive);
+    console.log('🔑 Found', allUserKeys.length, 'active keys for profile update');
 
     if (allUserKeys.length === 0) {
+      console.error('❌ No active API keys found for profile update');
       alert('No active API keys found');
       return;
     }
 
     const apiKeys = allUserKeys.map(k => k.apiKey);
+    console.log('🔑 Using API keys for update:', apiKeys.map(k => k.substring(0, 10) + '...'));
 
     try {
+      console.log('🔧 Creating Apify service for profile update...');
       const apifyService = createApifyService(apiKeys);
-      const profilesData = await scrapeProfilesDirectly([profileUrl], apifyService);
+      console.log('✅ Apify service created for profile update');
       
+      console.log('🌐 About to call apifyService.scrapeProfiles for profile update...');
+      const datasetId = await apifyService.scrapeProfiles([profileUrl]);
+      console.log('✅ Got dataset ID for profile update:', datasetId);
+      
+      console.log('📥 About to call apifyService.getDatasetItems for profile update...');
+      const profilesData = await apifyService.getDatasetItems(datasetId);
+      console.log('✅ Got profile update data:', profilesData.length, 'items');
+      
+      // Save updated profile to database and local storage
       if (profilesData.length > 0) {
-        await loadUserData(currentUser.id);
-        alert('Profile updated successfully!');
+        const profileData = profilesData[0];
+        console.log('💾 Saving updated profile to database and local storage...');
+        
+        try {
+          // Save to Supabase
+          await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
+          
+          // Save to local storage
+          LocalStorageService.addUserProfile(currentUser!.id, {
+            linkedin_url: profileData.linkedinUrl,
+            profile_data: profileData,
+            last_updated: new Date().toISOString()
+          });
+          
+          console.log('✅ Saved updated profile to DB and localStorage:', profileData.linkedinUrl);
+        } catch (saveError) {
+          console.error('❌ Error saving updated profile:', profileData.linkedinUrl, 'Error:', saveError);
+        }
       }
+      
+      // Update local profiles state
+      const updatedProfiles = LocalStorageService.getUserProfiles(currentUser.id);
+      setProfiles(updatedProfiles);
+      
+      alert('Profile updated successfully!');
     } catch (error) {
       console.error('❌ Error updating profile:', error);
       alert('Error updating profile. Please try again.');
@@ -700,26 +657,66 @@ function App() {
   };
 
   const handleUpdateSelectedProfiles = async (profileUrls: string[]) => {
+    console.log('🔄 handleUpdateSelectedProfiles called with:', profileUrls.length, 'URLs');
+    
     if (!currentUser || !selectedKeyId) {
+      console.error('❌ Missing user or API key for bulk update');
       alert('Please ensure you are signed in and have selected an API key');
       return;
     }
 
     const keys = LocalStorageService.getApifyKeys(currentUser.id);
     const allUserKeys = keys.filter(k => k.isActive);
+    console.log('🔑 Found', allUserKeys.length, 'active keys for bulk update');
 
     if (allUserKeys.length === 0) {
+      console.error('❌ No active API keys found for bulk update');
       alert('No active API keys found');
       return;
     }
 
     const apiKeys = allUserKeys.map(k => k.apiKey);
+    console.log('🔑 Using API keys for bulk update:', apiKeys.map(k => k.substring(0, 10) + '...'));
 
     try {
+      console.log('🔧 Creating Apify service for bulk update...');
       const apifyService = createApifyService(apiKeys);
-      await scrapeProfilesDirectly(profileUrls, apifyService);
+      console.log('✅ Apify service created for bulk update');
       
-      await loadUserData(currentUser.id);
+      console.log('🌐 About to call apifyService.scrapeProfiles for bulk update...');
+      const datasetId = await apifyService.scrapeProfiles(profileUrls);
+      console.log('✅ Got dataset ID for bulk update:', datasetId);
+      
+      console.log('📥 About to call apifyService.getDatasetItems for bulk update...');
+      const profilesData = await apifyService.getDatasetItems(datasetId);
+      console.log('✅ Got bulk update profiles data:', profilesData.length, 'items');
+      
+      // Save updated profiles to database and local storage
+      console.log('💾 Saving bulk updated profiles to database and local storage...');
+      for (const profileData of profilesData) {
+        if (profileData.linkedinUrl) {
+          try {
+            // Save to Supabase
+            await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
+            
+            // Save to local storage
+            LocalStorageService.addUserProfile(currentUser!.id, {
+              linkedin_url: profileData.linkedinUrl,
+              profile_data: profileData,
+              last_updated: new Date().toISOString()
+            });
+            
+            console.log('✅ Saved bulk updated profile to DB and localStorage:', profileData.linkedinUrl);
+          } catch (saveError) {
+            console.error('❌ Error saving bulk updated profile:', profileData.linkedinUrl, 'Error:', saveError);
+          }
+        }
+      }
+      
+      // Update local profiles state
+      const updatedProfiles = LocalStorageService.getUserProfiles(currentUser.id);
+      setProfiles(updatedProfiles);
+      
       alert(`Successfully updated ${profileUrls.length} profiles!`);
     } catch (error) {
       console.error('❌ Error updating profiles:', error);
